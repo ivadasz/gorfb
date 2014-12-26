@@ -435,8 +435,8 @@ func (ev muxDelConn) work(state *rfbMuxState) {
 	}
 }
 
-func rfbMux(ch <-chan muxMsg, input chan InputEvent, txt chan CutEvent) {
-	state := rfbMuxState{[]*net.Conn{}, input, txt}
+func rfbMux(ch <-chan muxMsg, serv *RfbServer) {
+	state := rfbMuxState{[]*net.Conn{}, serv.Input, serv.Txt}
 
 	for msg := range ch {
 		msg.work(&state)
@@ -478,7 +478,7 @@ func encodeDirty(img image.Image, dirt Dirty) []byte {
 	return outbuf
 }
 
-func updater(img draw.Image, fbch <-chan getUpdate, get chan draw.Image, rel <-chan []image.Rectangle, regch chan chan []image.Rectangle, unregch <-chan chan []image.Rectangle) {
+func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer, regch chan chan []image.Rectangle, unregch <-chan chan []image.Rectangle) {
 	reglist := []chan []image.Rectangle{}
 	defer func() {
 		for _, ch := range reglist {
@@ -490,9 +490,9 @@ func updater(img draw.Image, fbch <-chan getUpdate, get chan draw.Image, rel <-c
 
 	for {
 		select {
-		case get <- img:
+		case serv.Getfb <- img:
 			{
-				d := <-rel
+				d := <-serv.Relfb
 				// signal the d image.Rectangle to all the dirtyTrackers
 				for _, reg := range reglist {
 					reg <- d
@@ -534,8 +534,8 @@ func serve(port string, img draw.Image, serv *RfbServer) {
 	unregch := make(chan chan []image.Rectangle)
 	defer close(unregch)
 
-	go rfbMux(muxch, serv.Input, serv.Txt)
-	go updater(img, fbch, serv.Getfb, serv.Relfb, regch, unregch)
+	go rfbMux(muxch, serv)
+	go updater(img, fbch, serv, regch, unregch)
 
 	// go accepter(ln, muxch, fbch)
 	accepter(serv.ln, img.Bounds(), muxch, fbch, regch, unregch)

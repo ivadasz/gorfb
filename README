@@ -1,0 +1,6 @@
+This aims to become a full blown RFB (VNC) server written in go.
+
+The current code design tries to avoid blocking as much as possible.
+No actual negotiation of encodings is performed, we just send raw rectangles
+for now.
+Tracking of dirty regions tracks only up to two rectangles at a time.

@@ -52,6 +52,7 @@ func main() {
 							dirty = append(dirty, drawdot(a, p.Pos))
 						} else {
 							// Keyboard Event
+							fmt.Printf("keyboard event: downflag=%v, key=0x%x\n", p.Mask, p.Key)
 						}
 					}
 					serv.Relfb <- dirty
@@ -75,7 +76,7 @@ func main() {
 						pending = append(pending, a)
 					} else if a.T == 1 {
 						// Keyboard Event
-						fmt.Printf("keyboard event: %v\n", a)
+						fmt.Printf("keyboard event: downflag=%v, key=0x%x\n", a.Mask, a.Key)
 					}
 				}
 			case a := <-serv.Txt:

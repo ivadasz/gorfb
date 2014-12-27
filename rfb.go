@@ -38,7 +38,7 @@ type (
 
 	InputEvent struct {
 		T    int
-		Key  uint16
+		Key  uint32
 		Pos  image.Point
 		Mask uint8
 	}
@@ -290,26 +290,23 @@ func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan di
 			}
 		case RFB_KEY_EVENT:
 			{
-				b := make([]byte, 7)
-				n, err := in.Read(b)
+				var b [7]byte
+				n, err := in.Read(b[:])
 				if err != nil || n != 7 {
 					log.Print(err)
 					return
 				}
-				mux <- InputEvent{T: 1, Key: 0}
+				mux <- kbdEvent(b)
 			}
 		case RFB_POINTER_EVENT:
 			{
-				b := make([]byte, 5)
-				n, err := in.Read(b)
+				var b [5]byte
+				n, err := in.Read(b[:])
 				if err != nil || n != 5 {
 					log.Print(err)
 					return
 				}
-				mask := uint8(b[0])
-				x := int(binary.BigEndian.Uint16(b[1:3]))
-				y := int(binary.BigEndian.Uint16(b[3:5]))
-				mux <- InputEvent{T: 0, Pos: image.Point{x, y}, Mask: mask}
+				mux <- ptrEvent(b)
 			}
 		case RFB_CLIENT_CUT_TEXT:
 			{
@@ -409,6 +406,19 @@ func accepter(ln net.Listener, bounds image.Rectangle, mux chan muxMsg, fbch cha
 		}
 		go handleConn(conn, bounds, mux, fbch, regch, unregch)
 	}
+}
+
+func ptrEvent(b [5]byte) InputEvent {
+	mask := uint8(b[0])
+	x := int(binary.BigEndian.Uint16(b[1:3]))
+	y := int(binary.BigEndian.Uint16(b[3:5]))
+	return InputEvent{T: 0, Pos: image.Point{x, y}, Mask: mask}
+}
+
+func kbdEvent(b [7]byte) InputEvent {
+     downflag := uint8(b[0])
+     key := binary.BigEndian.Uint32(b[3:7])
+     return InputEvent{T: 1, Key: key, Mask: downflag}
 }
 
 func (ev InputEvent) work(state *rfbMuxState) {

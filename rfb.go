@@ -25,7 +25,7 @@ type (
 	}
 	getUpdate struct {
 		Dirty
-		outch chan []byte
+		outch chan [][]byte
 	}
 	rfbMuxState struct {
 		conlist []*net.Conn
@@ -162,7 +162,7 @@ func getSharedFlag(conn net.Conn) (bool, error) {
 	return d[0] == 1, nil
 }
 
-func dirtyTracker(ch <-chan dirtyRect, fbch chan getUpdate, outch chan []byte, regch <-chan chan []image.Rectangle, unregch chan chan []image.Rectangle) {
+func dirtyTracker(ch <-chan dirtyRect, fbch chan getUpdate, outch chan [][]byte, regch <-chan chan []image.Rectangle, unregch chan chan []image.Rectangle) {
 	var msg dirtyRect
 
 	wanted := image.Rect(0, 0, 0, 0)
@@ -329,13 +329,15 @@ func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan di
 	}
 }
 
-func clientOutput(out io.Writer, ctl chan interface{}, ch <-chan []byte) {
+func clientOutput(out io.Writer, ctl chan interface{}, ch <-chan [][]byte) {
 	defer func() {
 		ctl <- nil
 	}()
 
 	for b := range ch {
-		out.Write(b)
+		for _, c := range b {
+			out.Write(c)
+		}
 	}
 }
 
@@ -384,7 +386,7 @@ func handleConn(conn net.Conn, bounds image.Rectangle, mux chan muxMsg, fbch cha
 	}()
 	ctl := make(chan interface{})
 	dt := make(chan dirtyRect)
-	outch := make(chan []byte)
+	outch := make(chan [][]byte)
 
 	go dirtyTracker(dt, fbch, outch, regch, unregch)
 	go clientInput(conn, ctl, mux, dt)
@@ -485,40 +487,55 @@ func rfbMux(ch <-chan muxMsg, serv *RfbServer) {
 		msg.work(&state)
 	}
 }
-func encodeDirty(img image.Image, dirt Dirty) []byte {
+
+func encodeRect(img image.Image, rect image.Rectangle, b [][]byte) {
+	// Rectangle header
+	nextbuf := make([]byte, 12)
+	x := rect.Min.X
+	y := rect.Min.Y
+	w := rect.Dx()
+	h := rect.Dy()
+	binary.BigEndian.PutUint16(nextbuf[0:2], uint16(x))
+	binary.BigEndian.PutUint16(nextbuf[2:4], uint16(y))
+	binary.BigEndian.PutUint16(nextbuf[4:6], uint16(w))
+	binary.BigEndian.PutUint16(nextbuf[6:8], uint16(h))
+	encoding := uint32(int32(RFB_ENCODING_RAW))
+	binary.BigEndian.PutUint32(nextbuf[8:12], encoding)
+
+	// Rectangle data
+	rawbuf := make([]byte, w*h*4)
+	for i := 0; i < h; i++ {
+		for j := 0; j < w; j++ {
+			r, g, b, a := img.At(x+j, y+i).RGBA()
+			rawbuf[i*int(w)*4+j*4] = byte(uint8(b))
+			rawbuf[i*int(w)*4+j*4+1] = byte(uint8(g))
+			rawbuf[i*int(w)*4+j*4+2] = byte(uint8(r))
+			rawbuf[i*int(w)*4+j*4+3] = byte(uint8(a))
+		}
+	}
+
+	b[0] = nextbuf
+	b[1] = rawbuf
+}
+
+func encodeDirty(img image.Image, dirt Dirty) [][]byte {
 	rs := dirt.toRects()
 	nrects := len(rs)
 
+	if nrects == 0 {
+		return [][]byte{}
+	}
+
+	outbytes := make([][]byte, 2*nrects+1)
 	outbuf := make([]byte, 4)
 	outbuf[0] = RFB_FRAMEBUFFER_UPDATE
 	outbuf[1] = 0 // padding
 	binary.BigEndian.PutUint16(outbuf[2:4], uint16(nrects))
-	for _, r := range rs {
-		nextbuf := make([]byte, 12)
-		x := r.Min.X
-		y := r.Min.Y
-		w := r.Dx()
-		h := r.Dy()
-		binary.BigEndian.PutUint16(nextbuf[0:2], uint16(x))
-		binary.BigEndian.PutUint16(nextbuf[2:4], uint16(y))
-		binary.BigEndian.PutUint16(nextbuf[4:6], uint16(w))
-		binary.BigEndian.PutUint16(nextbuf[6:8], uint16(h))
-		encoding := uint32(int32(RFB_ENCODING_RAW))
-		binary.BigEndian.PutUint32(nextbuf[8:12], encoding)
-		outbuf = append(outbuf, nextbuf...)
-		rawbuf := make([]byte, w*h*4)
-		for i := 0; i < h; i++ {
-			for j := 0; j < w; j++ {
-				r, g, b, a := img.At(x+j, y+i).RGBA()
-				rawbuf[i*int(w)*4+j*4] = byte(uint8(b))
-				rawbuf[i*int(w)*4+j*4+1] = byte(uint8(g))
-				rawbuf[i*int(w)*4+j*4+2] = byte(uint8(r))
-				rawbuf[i*int(w)*4+j*4+3] = byte(uint8(a))
-			}
-		}
-		outbuf = append(outbuf, rawbuf...)
+	outbytes[0] = outbuf
+	for i, r := range rs {
+		encodeRect(img, r, outbytes[2*i+1:2*i+3])
 	}
-	return outbuf
+	return outbytes
 }
 
 func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer, regch chan chan []image.Rectangle, unregch <-chan chan []image.Rectangle) {

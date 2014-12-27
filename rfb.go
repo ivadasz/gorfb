@@ -323,7 +323,7 @@ func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan di
 					log.Print(err)
 					return
 				}
-				mux <- CutEvent{string(c)}
+				mux <- cutEvent(c)
 			}
 		}
 	}
@@ -416,9 +416,42 @@ func ptrEvent(b [5]byte) InputEvent {
 }
 
 func kbdEvent(b [7]byte) InputEvent {
-     downflag := uint8(b[0])
-     key := binary.BigEndian.Uint32(b[3:7])
-     return InputEvent{T: 1, Key: key, Mask: downflag}
+	downflag := uint8(b[0])
+	key := binary.BigEndian.Uint32(b[3:7])
+	return InputEvent{T: 1, Key: key, Mask: downflag}
+}
+
+func cutEvent(b []byte) CutEvent {
+	return CutEvent{string(b)}
+}
+
+func (ev InputEvent) encode() []byte {
+	var b []byte
+	if ev.T == 0 {
+		// Mouse Event
+		b = make([]byte, 6)
+		b[0] = byte(uint8(RFB_POINTER_EVENT))
+		b[1] = byte(ev.Mask)
+		binary.BigEndian.PutUint16(b[2:4], uint16(ev.Pos.X))
+		binary.BigEndian.PutUint16(b[4:6], uint16(ev.Pos.Y))
+	} else {
+		// Keyboard Event
+		b = make([]byte, 8)
+		b[0] = byte(uint8(RFB_KEY_EVENT))
+		b[1] = byte(ev.Mask)
+		binary.BigEndian.PutUint32(b[4:8], ev.Key)
+	}
+	return b
+}
+
+func (ev CutEvent) encode() []byte {
+	b := make([]byte, 8+len(ev.Txt))
+
+	b[0] = byte(RFB_CLIENT_CUT_TEXT)
+	binary.BigEndian.PutUint32(b[4:8], uint32(len(ev.Txt)))
+	copy(b[8:], ev.Txt)
+
+	return b
 }
 
 func (ev InputEvent) work(state *rfbMuxState) {

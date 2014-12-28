@@ -24,6 +24,7 @@ type (
 		redMax, greenMax, blueMax       uint16
 		redShift, greenShift, blueShift uint8
 	}
+	encodings  []int32
 	updateRect struct {
 		image.Rectangle
 		incr bool
@@ -220,32 +221,34 @@ func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan up
 		switch b[0] {
 		case RFB_SET_PIXEL_FORMAT:
 			{
-				b := make([]byte, 19)
-				n, err := in.Read(b)
+				var b [19]byte
+				n, err := in.Read(b[:])
 				if err != nil || n != 19 {
 					log.Print(err)
 					return
 				}
-				fmt.Printf("Pixel Format: %v\n", b[3:19])
+				format := decodePixelFormat(b)
+				fmt.Printf("Pixel Format: %v\n", format)
 			}
 		case RFB_SET_ENCODINGS:
 			{
-				b := make([]byte, 3)
-				n, err := in.Read(b)
+				var b [3]byte
+				n, err := in.Read(b[:])
 				if err != nil || n != 3 {
 					log.Print(err)
 					return
 				}
 				m := binary.BigEndian.Uint16(b[1:3])
+				c := make([]byte, 4*m)
 				for i := 0; i < int(m); i++ {
-					c := make([]byte, 4)
-					n, err := in.Read(c)
+					n, err := in.Read(c[4*i : 4*(i+1)])
 					if err != nil || n != 4 {
 						log.Print(err)
 						return
 					}
-					fmt.Printf("Encoding type: %d\n", int32(binary.BigEndian.Uint32(c)))
 				}
+				ls := decodeEncodings(c)
+				fmt.Printf("Encodings: %v\n", ls)
 			}
 		case RFB_FRAMEBUFFER_UPDATE_REQUEST:
 			{
@@ -379,9 +382,10 @@ func accepter(ln net.Listener, bounds image.Rectangle, mux chan muxMsg, fbch cha
 	}
 }
 
-func decodePixelFormat(b [16]byte) PixelFormat {
+func decodePixelFormat(buf [19]byte) PixelFormat {
 	var f PixelFormat
 
+	b := buf[3:]
 	f.bpp = uint8(b[0])
 	f.depth = uint8(b[1])
 	f.beflag = uint8(b[2])
@@ -394,6 +398,15 @@ func decodePixelFormat(b [16]byte) PixelFormat {
 	f.blueShift = uint8(b[12])
 
 	return f
+}
+
+func decodeEncodings(b []byte) encodings {
+	n := len(b) / 4
+	e := make([]int32, n)
+	for i := range e {
+		e[i] = int32(binary.BigEndian.Uint32(b[4*i : 4*(i+1)]))
+	}
+	return e
 }
 
 func updateRequest(b [9]byte) updateRect {
@@ -436,6 +449,16 @@ func (f PixelFormat) encode() []byte {
 	b[10] = byte(f.redShift)
 	b[11] = byte(f.greenShift)
 	b[12] = byte(f.blueShift)
+	return b
+}
+
+func (e encodings) encodeEncodings() []byte {
+	b := make([]byte, 4+4*len(e))
+	b[0] = RFB_SET_ENCODINGS
+	binary.BigEndian.PutUint16(b[2:4], uint16(len(e)))
+	for i, j := range e {
+		binary.BigEndian.PutUint32(b[4*i+4:4*i+8], uint32(j))
+	}
 	return b
 }
 

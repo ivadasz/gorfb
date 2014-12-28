@@ -19,6 +19,11 @@ type (
 		Getfb chan draw.Image
 		Relfb chan []image.Rectangle
 	}
+	PixelFormat struct {
+		bpp, depth, beflag, trueColor   uint8
+		redMax, greenMax, blueMax       uint16
+		redShift, greenShift, blueShift uint8
+	}
 	updateRect struct {
 		image.Rectangle
 		incr bool
@@ -79,26 +84,6 @@ const (
 	// XXX
 )
 
-func makePixelFormat() []byte {
-	b := make([]byte, 16)
-
-	b[0] = 32
-	b[1] = 24
-	b[2] = 0
-	b[3] = 1
-	binary.BigEndian.PutUint16(b[4:6], 255)
-	binary.BigEndian.PutUint16(b[6:8], 255)
-	binary.BigEndian.PutUint16(b[8:10], 255)
-	b[10] = 16
-	b[11] = 8
-	b[12] = 0
-	b[13] = 0 // padding
-	b[14] = 0 // padding
-	b[15] = 0 // padding
-
-	return b
-}
-
 func makeServerInit(name string, bounds image.Rectangle) []byte {
 	b := make([]byte, 24+len(name))
 
@@ -109,7 +94,8 @@ func makeServerInit(name string, bounds image.Rectangle) []byte {
 	binary.BigEndian.PutUint16(b[2:4], uint16(bounds.Dy()))
 
 	// server-pixel-format
-	copy(b[4:20], makePixelFormat())
+	format := PixelFormat{32, 24, 0, 1, 255, 255, 255, 16, 8, 0}
+	copy(b[4:20], format.encode())
 
 	// name-length
 	binary.BigEndian.PutUint32(b[20:24], uint32(len(name)))
@@ -393,6 +379,23 @@ func accepter(ln net.Listener, bounds image.Rectangle, mux chan muxMsg, fbch cha
 	}
 }
 
+func decodePixelFormat(b [16]byte) PixelFormat {
+	var f PixelFormat
+
+	f.bpp = uint8(b[0])
+	f.depth = uint8(b[1])
+	f.beflag = uint8(b[2])
+	f.trueColor = uint8(b[3])
+	f.redMax = binary.BigEndian.Uint16(b[4:6])
+	f.greenMax = binary.BigEndian.Uint16(b[6:8])
+	f.blueMax = binary.BigEndian.Uint16(b[8:10])
+	f.redShift = uint8(b[10])
+	f.greenShift = uint8(b[11])
+	f.blueShift = uint8(b[12])
+
+	return f
+}
+
 func updateRequest(b [9]byte) updateRect {
 	incr := b[0] == 1
 	x := int(binary.BigEndian.Uint16(b[1:3]))
@@ -421,9 +424,23 @@ func cutEvent(b []byte) CutEvent {
 	return CutEvent{string(b)}
 }
 
+func (f PixelFormat) encode() []byte {
+	b := make([]byte, 16)
+	b[0] = byte(f.bpp)
+	b[1] = byte(f.depth)
+	b[2] = byte(f.beflag)
+	b[3] = byte(f.trueColor)
+	binary.BigEndian.PutUint16(b[4:6], f.redMax)
+	binary.BigEndian.PutUint16(b[6:8], f.greenMax)
+	binary.BigEndian.PutUint16(b[8:10], f.blueMax)
+	b[10] = byte(f.redShift)
+	b[11] = byte(f.greenShift)
+	b[12] = byte(f.blueShift)
+	return b
+}
+
 func (rect updateRect) encode() []byte {
 	b := make([]byte, 10)
-
 	b[0] = byte(uint8(RFB_FRAMEBUFFER_UPDATE_REQUEST))
 	if rect.incr {
 		b[1] = 1
@@ -434,7 +451,6 @@ func (rect updateRect) encode() []byte {
 	binary.BigEndian.PutUint16(b[4:6], uint16(rect.Min.Y))
 	binary.BigEndian.PutUint16(b[6:8], uint16(rect.Dx()))
 	binary.BigEndian.PutUint16(b[8:10], uint16(rect.Dy()))
-
 	return b
 }
 
@@ -459,11 +475,9 @@ func (ev InputEvent) encode() []byte {
 
 func (ev CutEvent) encode() []byte {
 	b := make([]byte, 8+len(ev.Txt))
-
 	b[0] = byte(RFB_CLIENT_CUT_TEXT)
 	binary.BigEndian.PutUint32(b[4:8], uint32(len(ev.Txt)))
 	copy(b[8:], ev.Txt)
-
 	return b
 }
 

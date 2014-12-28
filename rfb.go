@@ -19,9 +19,9 @@ type (
 		Getfb chan draw.Image
 		Relfb chan []image.Rectangle
 	}
-	dirtyRect struct {
+	updateRect struct {
 		image.Rectangle
-		req int
+		incr bool
 	}
 	getUpdate struct {
 		Dirty
@@ -162,8 +162,8 @@ func getSharedFlag(conn net.Conn) (bool, error) {
 	return d[0] == 1, nil
 }
 
-func dirtyTracker(ch <-chan dirtyRect, fbch chan getUpdate, outch chan [][]byte, regch <-chan chan []image.Rectangle, unregch chan chan []image.Rectangle) {
-	var msg dirtyRect
+func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte, regch <-chan chan []image.Rectangle, unregch chan chan []image.Rectangle) {
+	var msg updateRect
 
 	wanted := image.Rect(0, 0, 0, 0)
 	dirty := mkclean()
@@ -178,10 +178,9 @@ func dirtyTracker(ch <-chan dirtyRect, fbch chan getUpdate, outch chan [][]byte,
 			select {
 			case msg := <-ch:
 				{
-					if msg.req == 1 {
+					wanted = msg.Rectangle
+					if !msg.incr {
 						dirty = dirty.add(msg.Rectangle)
-					} else {
-						wanted = msg.Rectangle
 					}
 				}
 			case a := <-reg:
@@ -195,10 +194,9 @@ func dirtyTracker(ch <-chan dirtyRect, fbch chan getUpdate, outch chan [][]byte,
 			select {
 			case msg = <-ch:
 				{
-					if msg.req == 1 {
+					wanted = msg.Rectangle
+					if !msg.incr {
 						dirty = dirty.add(msg.Rectangle)
-					} else {
-						wanted = msg.Rectangle
 					}
 				}
 			case a := <-reg:
@@ -221,7 +219,7 @@ func dirtyTracker(ch <-chan dirtyRect, fbch chan getUpdate, outch chan [][]byte,
 	}
 }
 
-func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan dirtyRect) {
+func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan updateRect) {
 	defer func() {
 		ctl <- nil
 	}()
@@ -265,28 +263,13 @@ func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan di
 			}
 		case RFB_FRAMEBUFFER_UPDATE_REQUEST:
 			{
-				b := make([]byte, 9)
-				n, err := in.Read(b)
+				var b [9]byte
+				n, err := in.Read(b[:])
 				if err != nil || n != 9 {
 					log.Print(err)
 					return
 				}
-				incr := b[0] == 1
-				x := int(binary.BigEndian.Uint16(b[1:3]))
-				y := int(binary.BigEndian.Uint16(b[3:5]))
-				w := int(binary.BigEndian.Uint16(b[5:7]))
-				h := int(binary.BigEndian.Uint16(b[7:9]))
-				//				fmt.Printf("UpdateRequest: incr=%v x=%v y=%v w=%v h=%v\n", incr, x, y, w, h)
-				// Send the viewport of our remote client to
-				// the dirtyTracker goroutine.
-				dt <- dirtyRect{image.Rect(x, y, x+w, y+h), 0}
-
-				// Signal our viewport as dirty if
-				// non-incremental update is signaled by our
-				// client.
-				if !incr {
-					dt <- dirtyRect{image.Rect(x, y, x+w, y+h), 1}
-				}
+				dt <- updateRequest(b)
 			}
 		case RFB_KEY_EVENT:
 			{
@@ -385,7 +368,7 @@ func handleConn(conn net.Conn, bounds image.Rectangle, mux chan muxMsg, fbch cha
 		mux <- muxDelConn{&conn}
 	}()
 	ctl := make(chan interface{})
-	dt := make(chan dirtyRect)
+	dt := make(chan updateRect)
 	outch := make(chan [][]byte)
 
 	go dirtyTracker(dt, fbch, outch, regch, unregch)
@@ -408,6 +391,16 @@ func accepter(ln net.Listener, bounds image.Rectangle, mux chan muxMsg, fbch cha
 		}
 		go handleConn(conn, bounds, mux, fbch, regch, unregch)
 	}
+}
+func updateRequest(b [9]byte) updateRect {
+	incr := b[0] == 1
+	x := int(binary.BigEndian.Uint16(b[1:3]))
+	y := int(binary.BigEndian.Uint16(b[3:5]))
+	w := int(binary.BigEndian.Uint16(b[5:7]))
+	h := int(binary.BigEndian.Uint16(b[7:9]))
+
+	// Send the viewport of our remote client to the dirtyTracker goroutine.
+	return updateRect{image.Rect(x, y, x+w, y+h), incr}
 }
 
 func ptrEvent(b [5]byte) InputEvent {

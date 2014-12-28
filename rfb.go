@@ -24,10 +24,18 @@ type (
 		redMax, greenMax, blueMax       uint16
 		redShift, greenShift, blueShift uint8
 	}
-	encodings  []int32
+	encodings    []int32
+	serverStatus struct {
+		fbWidth, fbHeight int
+		format            PixelFormat
+		name              string
+	}
 	updateRect struct {
 		image.Rectangle
 		incr bool
+	}
+	encodable interface {
+		encode() []byte
 	}
 	getUpdate struct {
 		Dirty
@@ -84,28 +92,6 @@ const (
 	RFB_ENCODING_COPYRECT = 1
 	// XXX
 )
-
-func makeServerInit(name string, bounds image.Rectangle) []byte {
-	b := make([]byte, 24+len(name))
-
-	// framebuffer-width in pixels
-	binary.BigEndian.PutUint16(b[0:2], uint16(bounds.Dx()))
-
-	// framebuff-height in pixels
-	binary.BigEndian.PutUint16(b[2:4], uint16(bounds.Dy()))
-
-	// server-pixel-format
-	format := PixelFormat{32, 24, 0, 1, 255, 255, 255, 16, 8, 0}
-	copy(b[4:20], format.encode())
-
-	// name-length
-	binary.BigEndian.PutUint32(b[20:24], uint32(len(name)))
-
-	// name-string
-	copy(b[24:], []byte(name))
-
-	return b
-}
 
 func reasonmsg(conn net.Conn, s string) {
 	b := make([]byte, 4)
@@ -222,12 +208,14 @@ func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan up
 		case RFB_SET_PIXEL_FORMAT:
 			{
 				var b [19]byte
+				var c [16]byte
 				n, err := in.Read(b[:])
 				if err != nil || n != 19 {
 					log.Print(err)
 					return
 				}
-				format := decodePixelFormat(b)
+				copy(c[:], b[3:])
+				format := decodePixelFormat(c)
 				fmt.Printf("Pixel Format: %v\n", format)
 			}
 		case RFB_SET_ENCODINGS:
@@ -345,7 +333,9 @@ func initializeConnection(conn net.Conn, bounds image.Rectangle) {
 		return
 	}
 	fmt.Printf("shared: %v\n", shared)
-	conn.Write(makeServerInit("GoRFB", bounds))
+	format := PixelFormat{32, 24, 0, 1, 255, 255, 255, 16, 8, 0}
+	serverInit := serverStatus{bounds.Dx(), bounds.Dy(), format, "GoRFB"}
+	conn.Write(serverInit.encode())
 }
 
 func handleConn(conn net.Conn, bounds image.Rectangle, mux chan muxMsg, fbch chan getUpdate, regch <-chan chan []image.Rectangle, unregch chan chan []image.Rectangle) {
@@ -382,10 +372,9 @@ func accepter(ln net.Listener, bounds image.Rectangle, mux chan muxMsg, fbch cha
 	}
 }
 
-func decodePixelFormat(buf [19]byte) PixelFormat {
+func decodePixelFormat(b [16]byte) PixelFormat {
 	var f PixelFormat
 
-	b := buf[3:]
 	f.bpp = uint8(b[0])
 	f.depth = uint8(b[1])
 	f.beflag = uint8(b[2])
@@ -398,6 +387,16 @@ func decodePixelFormat(buf [19]byte) PixelFormat {
 	f.blueShift = uint8(b[12])
 
 	return f
+}
+
+func decodeServerStatus(b []byte) serverStatus {
+	var c [16]byte
+	w := binary.BigEndian.Uint16(b[0:2])
+	h := binary.BigEndian.Uint16(b[2:4])
+	copy(c[:], b[4:20])
+	f := decodePixelFormat(c)
+	s := string(b[24:])
+	return serverStatus{int(w), int(h), f, s}
 }
 
 func decodeEncodings(b []byte) encodings {
@@ -452,7 +451,17 @@ func (f PixelFormat) encode() []byte {
 	return b
 }
 
-func (e encodings) encodeEncodings() []byte {
+func (s serverStatus) encode() []byte {
+	b := make([]byte, 24+len(s.name))
+	binary.BigEndian.PutUint16(b[0:2], uint16(s.fbWidth))
+	binary.BigEndian.PutUint16(b[2:4], uint16(s.fbHeight))
+	copy(b[4:20], s.format.encode())
+	binary.BigEndian.PutUint32(b[20:24], uint32(len(s.name)))
+	copy(b[24:], s.name)
+	return b
+}
+
+func (e encodings) encode() []byte {
 	b := make([]byte, 4+4*len(e))
 	b[0] = RFB_SET_ENCODINGS
 	binary.BigEndian.PutUint16(b[2:4], uint16(len(e)))

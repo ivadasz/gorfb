@@ -392,6 +392,7 @@ func accepter(ln net.Listener, bounds image.Rectangle, mux chan muxMsg, fbch cha
 		go handleConn(conn, bounds, mux, fbch, regch, unregch)
 	}
 }
+
 func updateRequest(b [9]byte) updateRect {
 	incr := b[0] == 1
 	x := int(binary.BigEndian.Uint16(b[1:3]))
@@ -418,6 +419,23 @@ func kbdEvent(b [7]byte) InputEvent {
 
 func cutEvent(b []byte) CutEvent {
 	return CutEvent{string(b)}
+}
+
+func (rect updateRect) encode() []byte {
+	b := make([]byte, 10)
+
+	b[0] = byte(uint8(RFB_FRAMEBUFFER_UPDATE_REQUEST))
+	if rect.incr {
+		b[1] = 1
+	} else {
+		b[1] = 0
+	}
+	binary.BigEndian.PutUint16(b[2:4], uint16(rect.Min.X))
+	binary.BigEndian.PutUint16(b[4:6], uint16(rect.Min.Y))
+	binary.BigEndian.PutUint16(b[6:8], uint16(rect.Dx()))
+	binary.BigEndian.PutUint16(b[8:10], uint16(rect.Dy()))
+
+	return b
 }
 
 func (ev InputEvent) encode() []byte {

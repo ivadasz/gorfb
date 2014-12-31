@@ -183,7 +183,7 @@ func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte
 					}
 				}
 
-			// This happends only when we can immediately read
+			// This happens only when we can immediately read
 			// the image data as well.
 			case fbch <- getUpdate{dirty.intersect(wanted), outch}:
 				{
@@ -292,6 +292,8 @@ func clientInput(in io.Reader, mux chan muxMsg, dt chan updateRect) {
 func clientOutput(out io.Writer, ch <-chan [][]byte) {
 	for b := range ch {
 		for _, c := range b {
+			// XXX Avoid race with "case a := <-fbch:" in updater(),
+			//     when aborting this goroutine
 			out.Write(c)
 		}
 	}

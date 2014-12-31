@@ -72,24 +72,24 @@ const (
 )
 
 const (
-	RFB_SET_PIXEL_FORMAT           = 0
-	RFB_SET_ENCODINGS              = 2
-	RFB_FRAMEBUFFER_UPDATE_REQUEST = 3
-	RFB_KEY_EVENT                  = 4
-	RFB_POINTER_EVENT              = 5
-	RFB_CLIENT_CUT_TEXT            = 6
+	setPixelFormatReq    = 0
+	setEncodingsReq      = 2
+	framebufferUpdateReq = 3
+	keyEventReq          = 4
+	pointerEventReq      = 5
+	clientCutTextReq     = 6
 )
 
 const (
-	RFB_FRAMEBUFFER_UPDATE    = 0
-	RFB_SET_COLOR_MAP_ENTRIES = 1
-	RFB_BELL                  = 2
-	RFB_SERVER_CUT_TEXT       = 3
+	framebufferUpdateMsg  = 0
+	setColorMapEntriesMsg = 1
+	bellMsg               = 2
+	serverCutTextMsg      = 3
 )
 
 const (
-	RFB_ENCODING_RAW      = 0
-	RFB_ENCODING_COPYRECT = 1
+	encodingRaw      = 0
+	encodingCopyrect = 1
 	// XXX
 )
 
@@ -205,7 +205,7 @@ func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan up
 			return
 		}
 		switch b[0] {
-		case RFB_SET_PIXEL_FORMAT:
+		case setPixelFormatReq:
 			{
 				var b [19]byte
 				var c [16]byte
@@ -218,7 +218,7 @@ func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan up
 				format := decodePixelFormat(c)
 				fmt.Printf("Pixel Format: %v\n", format)
 			}
-		case RFB_SET_ENCODINGS:
+		case setEncodingsReq:
 			{
 				var b [3]byte
 				n, err := in.Read(b[:])
@@ -238,7 +238,7 @@ func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan up
 				ls := decodeEncodings(c)
 				fmt.Printf("Encodings: %v\n", ls)
 			}
-		case RFB_FRAMEBUFFER_UPDATE_REQUEST:
+		case framebufferUpdateReq:
 			{
 				var b [9]byte
 				n, err := in.Read(b[:])
@@ -248,7 +248,7 @@ func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan up
 				}
 				dt <- updateRequest(b)
 			}
-		case RFB_KEY_EVENT:
+		case keyEventReq:
 			{
 				var b [7]byte
 				n, err := in.Read(b[:])
@@ -258,7 +258,7 @@ func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan up
 				}
 				mux <- kbdEvent(b)
 			}
-		case RFB_POINTER_EVENT:
+		case pointerEventReq:
 			{
 				var b [5]byte
 				n, err := in.Read(b[:])
@@ -268,7 +268,7 @@ func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan up
 				}
 				mux <- ptrEvent(b)
 			}
-		case RFB_CLIENT_CUT_TEXT:
+		case clientCutTextReq:
 			{
 				b := make([]byte, 7)
 				n, err := in.Read(b)
@@ -463,7 +463,7 @@ func (s serverStatus) encode() []byte {
 
 func (e encodings) encode() []byte {
 	b := make([]byte, 4+4*len(e))
-	b[0] = RFB_SET_ENCODINGS
+	b[0] = setEncodingsReq
 	binary.BigEndian.PutUint16(b[2:4], uint16(len(e)))
 	for i, j := range e {
 		binary.BigEndian.PutUint32(b[4*i+4:4*i+8], uint32(j))
@@ -473,7 +473,7 @@ func (e encodings) encode() []byte {
 
 func (rect updateRect) encode() []byte {
 	b := make([]byte, 10)
-	b[0] = byte(uint8(RFB_FRAMEBUFFER_UPDATE_REQUEST))
+	b[0] = byte(uint8(framebufferUpdateReq))
 	if rect.incr {
 		b[1] = 1
 	} else {
@@ -491,14 +491,14 @@ func (ev InputEvent) encode() []byte {
 	if ev.T == 0 {
 		// Mouse Event
 		b = make([]byte, 6)
-		b[0] = byte(uint8(RFB_POINTER_EVENT))
+		b[0] = byte(uint8(pointerEventReq))
 		b[1] = byte(ev.Mask)
 		binary.BigEndian.PutUint16(b[2:4], uint16(ev.Pos.X))
 		binary.BigEndian.PutUint16(b[4:6], uint16(ev.Pos.Y))
 	} else {
 		// Keyboard Event
 		b = make([]byte, 8)
-		b[0] = byte(uint8(RFB_KEY_EVENT))
+		b[0] = byte(uint8(keyEventReq))
 		b[1] = byte(ev.Mask)
 		binary.BigEndian.PutUint32(b[4:8], ev.Key)
 	}
@@ -507,7 +507,7 @@ func (ev InputEvent) encode() []byte {
 
 func (ev CutEvent) encode() []byte {
 	b := make([]byte, 8+len(ev.Txt))
-	b[0] = byte(RFB_CLIENT_CUT_TEXT)
+	b[0] = byte(clientCutTextReq)
 	binary.BigEndian.PutUint32(b[4:8], uint32(len(ev.Txt)))
 	copy(b[8:], ev.Txt)
 	return b
@@ -556,7 +556,7 @@ func encodeRect(img image.Image, rect image.Rectangle, b [][]byte) {
 	binary.BigEndian.PutUint16(nextbuf[2:4], uint16(y))
 	binary.BigEndian.PutUint16(nextbuf[4:6], uint16(w))
 	binary.BigEndian.PutUint16(nextbuf[6:8], uint16(h))
-	encoding := uint32(int32(RFB_ENCODING_RAW))
+	encoding := uint32(int32(encodingRaw))
 	binary.BigEndian.PutUint32(nextbuf[8:12], encoding)
 
 	// Rectangle data
@@ -585,7 +585,7 @@ func encodeDirty(img image.Image, dirt Dirty) [][]byte {
 
 	outbytes := make([][]byte, 2*nrects+1)
 	outbuf := make([]byte, 4)
-	outbuf[0] = RFB_FRAMEBUFFER_UPDATE
+	outbuf[0] = framebufferUpdateMsg
 	outbuf[1] = 0 // padding
 	binary.BigEndian.PutUint16(outbuf[2:4], uint16(nrects))
 	outbytes[0] = outbuf

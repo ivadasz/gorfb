@@ -7,7 +7,7 @@ import (
 	"image/draw"
 	"log"
 
-	"gorfb"
+	"github.com/ivadasz/gorfb"
 )
 
 func drawdot(img draw.Image, pos image.Point) image.Rectangle {

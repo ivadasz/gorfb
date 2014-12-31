@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
 )
 
 type (
@@ -18,6 +19,13 @@ type (
 		Txt   chan CutEvent
 		Getfb chan draw.Image
 		Relfb chan []image.Rectangle
+	}
+	RfbClient struct {
+		conn net.Conn
+		bounds image.Rectangle
+		mux chan muxMsg
+		regch <-chan chan []image.Rectangle
+		unregch chan chan []image.Rectangle
 	}
 	PixelFormat struct {
 		bpp, depth, beflag, trueColor   uint8
@@ -135,20 +143,19 @@ func getSharedFlag(conn net.Conn) (bool, error) {
 	return d[0] == 1, nil
 }
 
-func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte, regch <-chan chan []image.Rectangle, unregch chan chan []image.Rectangle) {
+func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte, reg <-chan []image.Rectangle, done chan interface{}) {
 	var msg updateRect
 
 	wanted := image.Rect(0, 0, 0, 0)
 	dirty := mkclean()
 
-	reg := <-regch
-	defer func() {
-		unregch <- reg
-	}()
-
 	for {
 		if dirty.intersect(wanted).empty() {
 			select {
+			case <-done:
+				{
+					return
+				}
 			case msg := <-ch:
 				{
 					wanted = msg.Rectangle
@@ -165,6 +172,10 @@ func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte
 			}
 		} else {
 			select {
+			case <-done:
+				{
+					return
+				}
 			case msg = <-ch:
 				{
 					wanted = msg.Rectangle
@@ -192,11 +203,7 @@ func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte
 	}
 }
 
-func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan updateRect) {
-	defer func() {
-		ctl <- nil
-	}()
-
+func clientInput(in io.Reader, mux chan muxMsg, dt chan updateRect) {
 	b := make([]byte, 1)
 	for {
 		n, err := in.Read(b)
@@ -289,11 +296,7 @@ func clientInput(in io.Reader, ctl chan interface{}, mux chan muxMsg, dt chan up
 	}
 }
 
-func clientOutput(out io.Writer, ctl chan interface{}, ch <-chan [][]byte) {
-	defer func() {
-		ctl <- nil
-	}()
-
+func clientOutput(out io.Writer, ch <-chan [][]byte) {
 	for b := range ch {
 		for _, c := range b {
 			out.Write(c)
@@ -338,27 +341,46 @@ func initializeConnection(conn net.Conn, bounds image.Rectangle) {
 	conn.Write(serverInit.encode())
 }
 
-func handleConn(conn net.Conn, bounds image.Rectangle, mux chan muxMsg, fbch chan getUpdate, regch <-chan chan []image.Rectangle, unregch chan chan []image.Rectangle) {
-	defer conn.Close()
-	initializeConnection(conn, bounds)
+func handleConn(client *RfbClient, fbch chan getUpdate) {
+	var wg sync.WaitGroup
 
-	mux <- muxNewConn{&conn}
+	initializeConnection(client.conn, client.bounds)
+
+	client.mux <- muxNewConn{&client.conn}
 	defer func() {
-		mux <- muxDelConn{&conn}
+		client.mux <- muxDelConn{&client.conn}
+		fmt.Printf("finished connection\n")
 	}()
-	ctl := make(chan interface{})
+	done := make(chan interface{})
 	dt := make(chan updateRect)
 	outch := make(chan [][]byte)
 
-	go dirtyTracker(dt, fbch, outch, regch, unregch)
-	go clientInput(conn, ctl, mux, dt)
-	go clientOutput(conn, ctl, outch)
+	go func() {
+		reg := <-client.regch
+		defer func() {
+			client.unregch <- reg
+			fmt.Printf("finished dirtyTracker\n")
+		}()
+		dirtyTracker(dt, fbch, outch, reg, done)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		clientInput(client.conn, client.mux, dt)
+		fmt.Printf("finished clientInput\n")
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		clientOutput(client.conn, outch)
+		fmt.Printf("finished clientOutput\n")
+	}()
 
-	<-ctl // clientInput or -Output exits
-	<-ctl // clientInput or -Output exits
-	close(ctl)
+	wg.Wait()
+	done <- nil
+	close(done)
 	close(outch)
-	close(dt) // stop dirtyTracker
+	close(dt)
 }
 
 func accepter(ln net.Listener, bounds image.Rectangle, mux chan muxMsg, fbch chan getUpdate, regch <-chan chan []image.Rectangle, unregch chan chan []image.Rectangle) {
@@ -368,7 +390,11 @@ func accepter(ln net.Listener, bounds image.Rectangle, mux chan muxMsg, fbch cha
 			log.Print(err)
 			return
 		}
-		go handleConn(conn, bounds, mux, fbch, regch, unregch)
+		client := &RfbClient{conn, bounds, mux, regch, unregch}
+		go func() {
+			defer conn.Close()
+			handleConn(client, fbch)
+		}()
 	}
 }
 

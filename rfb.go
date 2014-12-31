@@ -674,12 +674,12 @@ func Server(port string, img draw.Image) (*RfbServer, error) {
 	return serv, nil
 }
 
-func ServeDumbFb(w uint16, h uint16) (*RfbServer, error) {
+func ServeDumbFb(port string, w uint16, h uint16) (*RfbServer, error) {
 	img := image.NewRGBA(image.Rect(0, 0, int(w), int(h)))
 	black := color.RGBA{0, 0, 0, 0}
 	draw.Draw(img, image.Rect(0, 0, int(w), int(h)), &image.Uniform{black}, image.ZP, draw.Src)
 
-	serv, err := Server(":5900", img)
+	serv, err := Server(port, img)
 	if err != nil {
 		return nil, err
 	}

@@ -17,7 +17,7 @@ func drawdot(img draw.Image, pos image.Point) image.Rectangle {
 }
 
 func main() {
-	serv, err := gorfb.ServeDumbFb(320, 240)
+	serv, err := gorfb.ServeDumbFb(":5900", 320, 240)
 	if err != nil {
 		log.Fatal(err)
 	}

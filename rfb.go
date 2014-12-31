@@ -21,10 +21,10 @@ type (
 		Relfb chan []image.Rectangle
 	}
 	RfbClient struct {
-		conn net.Conn
-		bounds image.Rectangle
-		mux chan muxMsg
-		regch <-chan chan []image.Rectangle
+		conn    net.Conn
+		bounds  image.Rectangle
+		mux     chan muxMsg
+		regch   <-chan chan []image.Rectangle
 		unregch chan chan []image.Rectangle
 	}
 	PixelFormat struct {
@@ -50,9 +50,8 @@ type (
 		outch chan [][]byte
 	}
 	rfbMuxState struct {
-		conlist []*net.Conn
-		input   chan InputEvent
-		cut     chan CutEvent
+		input chan InputEvent
+		cut   chan CutEvent
 	}
 	muxMsg interface {
 		work(state *rfbMuxState)
@@ -66,12 +65,6 @@ type (
 	}
 	CutEvent struct {
 		Txt string
-	}
-	muxNewConn struct {
-		conn *net.Conn
-	}
-	muxDelConn struct {
-		conn *net.Conn
 	}
 )
 
@@ -346,11 +339,8 @@ func handleConn(client *RfbClient, fbch chan getUpdate) {
 
 	initializeConnection(client.conn, client.bounds)
 
-	client.mux <- muxNewConn{&client.conn}
-	defer func() {
-		client.mux <- muxDelConn{&client.conn}
-		fmt.Printf("finished connection\n")
-	}()
+	defer fmt.Printf("finished connection\n")
+
 	done := make(chan interface{})
 	dt := make(chan updateRect)
 	outch := make(chan [][]byte)
@@ -547,24 +537,8 @@ func (ev CutEvent) work(state *rfbMuxState) {
 	state.cut <- ev
 }
 
-func (ev muxNewConn) work(state *rfbMuxState) {
-	state.conlist = append(state.conlist, ev.conn)
-}
-
-func (ev muxDelConn) work(state *rfbMuxState) {
-	for i, conn := range state.conlist {
-		if conn == ev.conn {
-			if i+1 < len(state.conlist) {
-				state.conlist = append(state.conlist[:i], state.conlist[i+1:]...)
-			} else {
-				state.conlist = state.conlist[:i]
-			}
-		}
-	}
-}
-
 func rfbMux(ch <-chan muxMsg, serv *RfbServer) {
-	state := rfbMuxState{[]*net.Conn{}, serv.Input, serv.Txt}
+	state := rfbMuxState{serv.Input, serv.Txt}
 
 	for msg := range ch {
 		msg.work(&state)
@@ -623,6 +597,21 @@ func encodeDirty(img image.Image, dirt Dirty) [][]byte {
 	return outbytes
 }
 
+func remove(ls []chan []image.Rectangle, a chan []image.Rectangle) []chan []image.Rectangle {
+	res := ls
+	for i, c := range ls {
+		if a == c {
+			if i+1 < len(ls) {
+				res = append(ls[:i], ls[i+1:]...)
+			} else {
+				res = ls[:i]
+			}
+			close(a)
+		}
+	}
+	return res
+}
+
 func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer, regch chan chan []image.Rectangle, unregch <-chan chan []image.Rectangle) {
 	reglist := []chan []image.Rectangle{}
 	defer func() {
@@ -638,9 +627,30 @@ func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer, regch chan 
 		case serv.Getfb <- img:
 			{
 				d := <-serv.Relfb
-				// signal the d image.Rectangle to all the dirtyTrackers
-				for _, reg := range reglist {
-					reg <- d
+				// Signal the d image.Rectangle to all the
+				// dirtyTrackers. Avoid deadlock when any the
+				// dirtyTracker wants to unregister.
+				mylist := reglist[:]
+				for {
+					if len(mylist) == 0 {
+						break
+					}
+					reg := mylist[0]
+					select {
+					case reg <- d:
+						{
+							mylist = mylist[1:]
+						}
+					case a := <-unregch:
+						{
+							reglist = remove(reglist, a)
+							if a == reg {
+								mylist = mylist[1:]
+							} else {
+								mylist = remove(mylist, a)
+							}
+						}
+					}
 				}
 			}
 		case a := <-fbch:
@@ -654,16 +664,7 @@ func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer, regch chan 
 			}
 		case a := <-unregch:
 			{
-				for i, c := range reglist {
-					if a == c {
-						if i+1 < len(reglist) {
-							reglist = append(reglist[:i], reglist[i+1:]...)
-						} else {
-							reglist = reglist[:i]
-						}
-						close(a)
-					}
-				}
+				reglist = remove(reglist, a)
 			}
 		}
 	}

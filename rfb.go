@@ -545,19 +545,21 @@ func rfbMux(ch <-chan muxMsg, serv *RfbServer) {
 	}
 }
 
-func encodeRect(img image.Image, rect image.Rectangle, b [][]byte) {
-	// Rectangle header
-	nextbuf := make([]byte, 12)
+func rectHeader(rect image.Rectangle, encoding int32) []byte {
+	b := make([]byte, 12)
+	binary.BigEndian.PutUint16(b[0:2], uint16(rect.Min.X))
+	binary.BigEndian.PutUint16(b[2:4], uint16(rect.Min.Y))
+	binary.BigEndian.PutUint16(b[4:6], uint16(rect.Dx()))
+	binary.BigEndian.PutUint16(b[6:8], uint16(rect.Dy()))
+	binary.BigEndian.PutUint32(b[8:12], uint32(encoding))
+	return b
+}
+
+func encodeRaw(img image.Image, rect image.Rectangle, b [][]byte) {
 	x := rect.Min.X
 	y := rect.Min.Y
 	w := rect.Dx()
 	h := rect.Dy()
-	binary.BigEndian.PutUint16(nextbuf[0:2], uint16(x))
-	binary.BigEndian.PutUint16(nextbuf[2:4], uint16(y))
-	binary.BigEndian.PutUint16(nextbuf[4:6], uint16(w))
-	binary.BigEndian.PutUint16(nextbuf[6:8], uint16(h))
-	encoding := uint32(int32(encodingRaw))
-	binary.BigEndian.PutUint32(nextbuf[8:12], encoding)
 
 	// Rectangle data
 	rawbuf := make([]byte, w*h*4)
@@ -571,7 +573,7 @@ func encodeRect(img image.Image, rect image.Rectangle, b [][]byte) {
 		}
 	}
 
-	b[0] = nextbuf
+	b[0] = rectHeader(rect, int32(encodingRaw))
 	b[1] = rawbuf
 }
 
@@ -590,7 +592,7 @@ func encodeDirty(img image.Image, dirt Dirty) [][]byte {
 	binary.BigEndian.PutUint16(outbuf[2:4], uint16(nrects))
 	outbytes[0] = outbuf
 	for i, r := range rs {
-		encodeRect(img, r, outbytes[2*i+1:2*i+3])
+		encodeRaw(img, r, outbytes[2*i+1:2*i+3])
 	}
 	return outbytes
 }
@@ -669,7 +671,7 @@ func Server(port string, img draw.Image) (*RfbServer, error) {
 	relfb := make(chan []image.Rectangle)
 
 	serv := &RfbServer{ln, input, txt, getfb, relfb}
-	go serve(":5900", img, serv)
+	go serve(port, img, serv)
 
 	return serv, nil
 }

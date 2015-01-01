@@ -14,11 +14,13 @@ import (
 
 type (
 	RfbServer struct {
-		ln    net.Listener
-		Input chan InputEvent
-		Txt   chan CutEvent
-		Getfb chan draw.Image
-		Relfb chan []image.Rectangle
+		ln      net.Listener
+		Input   chan InputEvent
+		Txt     chan CutEvent
+		Getfb   chan draw.Image
+		Relfb   chan []image.Rectangle
+		regch   chan chan []image.Rectangle
+		unregch chan chan []image.Rectangle
 	}
 	RfbClient struct {
 		conn    net.Conn
@@ -375,14 +377,14 @@ func handleConn(client *RfbClient, fbch chan getUpdate) {
 	close(dt)
 }
 
-func accepter(ln net.Listener, bounds image.Rectangle, mux chan muxMsg, fbch chan getUpdate, regch <-chan chan []image.Rectangle, unregch chan chan []image.Rectangle) {
+func accepter(serv *RfbServer, bounds image.Rectangle, mux chan muxMsg, fbch chan getUpdate) {
 	for {
-		conn, err := ln.Accept()
+		conn, err := serv.ln.Accept()
 		if err != nil {
 			log.Print(err)
 			return
 		}
-		client := &RfbClient{conn, bounds, mux, regch, unregch}
+		client := &RfbClient{conn, bounds, mux, serv.regch, serv.unregch}
 		go func() {
 			defer conn.Close()
 			handleConn(client, fbch)
@@ -610,7 +612,7 @@ func remove(ls []chan []image.Rectangle, a chan []image.Rectangle) []chan []imag
 	return res
 }
 
-func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer, regch chan chan []image.Rectangle, unregch <-chan chan []image.Rectangle) {
+func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer) {
 	reglist := []chan []image.Rectangle{}
 	defer func() {
 		for _, ch := range reglist {
@@ -639,7 +641,7 @@ func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer, regch chan 
 						{
 							mylist = mylist[1:]
 						}
-					case a := <-unregch:
+					case a := <-serv.unregch:
 						{
 							reglist = remove(reglist, a)
 							mylist = remove(mylist, a)
@@ -651,12 +653,12 @@ func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer, regch chan 
 			{
 				a.outch <- encodeDirty(img, a.Dirty)
 			}
-		case regch <- ch:
+		case serv.regch <- ch:
 			{
 				reglist = append(reglist, ch)
 				ch = make(chan []image.Rectangle)
 			}
-		case a := <-unregch:
+		case a := <-serv.unregch:
 			{
 				reglist = remove(reglist, a)
 			}
@@ -669,16 +671,12 @@ func serve(port string, img draw.Image, serv *RfbServer) {
 	defer close(muxch)
 	fbch := make(chan getUpdate)
 	defer close(fbch)
-	regch := make(chan chan []image.Rectangle)
-	defer close(regch)
-	unregch := make(chan chan []image.Rectangle)
-	defer close(unregch)
 
 	go rfbMux(muxch, serv)
-	go updater(img, fbch, serv, regch, unregch)
+	go updater(img, fbch, serv)
 
-	// go accepter(ln, muxch, fbch)
-	accepter(serv.ln, img.Bounds(), muxch, fbch, regch, unregch)
+	// go accepter(serv, muxch, fbch)
+	accepter(serv, img.Bounds(), muxch, fbch)
 }
 
 func Server(port string, img draw.Image) (*RfbServer, error) {
@@ -690,8 +688,10 @@ func Server(port string, img draw.Image) (*RfbServer, error) {
 	txt := make(chan CutEvent)
 	getfb := make(chan draw.Image)
 	relfb := make(chan []image.Rectangle)
+	regch := make(chan chan []image.Rectangle)
+	unregch := make(chan chan []image.Rectangle)
 
-	serv := &RfbServer{ln, input, txt, getfb, relfb}
+	serv := &RfbServer{ln, input, txt, getfb, relfb, regch, unregch}
 	go serve(port, img, serv)
 
 	return serv, nil
@@ -716,4 +716,6 @@ func (serv *RfbServer) Shutdown() {
 	close(serv.Txt)
 	close(serv.Getfb)
 	close(serv.Relfb)
+	close(serv.regch)
+	close(serv.unregch)
 }

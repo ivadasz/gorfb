@@ -143,13 +143,25 @@ func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte
 
 	wanted := image.Rect(0, 0, 0, 0)
 	dirty := mkclean()
+	nextdata := [][]byte{}
+	updata := make(chan [][]byte)
+	update_pending := false
 
 	for {
-		if dirty.intersect(wanted).empty() {
+		if dirty.intersect(wanted).empty() && len(nextdata) == 0 {
 			select {
 			case <-done:
 				{
+					if update_pending {
+						<-updata
+					}
+					close(updata)
 					return
+				}
+			case d := <-updata:
+				{
+					update_pending = false
+					nextdata = append(nextdata, d...)
 				}
 			case msg := <-ch:
 				{
@@ -165,11 +177,53 @@ func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte
 					}
 				}
 			}
-		} else {
+		} else if dirty.intersect(wanted).empty() {
 			select {
 			case <-done:
 				{
+					if update_pending {
+						<-updata
+					}
+					close(updata)
 					return
+				}
+			case d := <-updata:
+				{
+					update_pending = false
+					nextdata = append(nextdata, d...)
+				}
+			case outch <- nextdata:
+				{
+					nextdata = [][]byte{}
+				}
+			case msg := <-ch:
+				{
+					wanted = msg.Rectangle
+					if !msg.incr {
+						dirty = dirty.add(msg.Rectangle)
+					}
+				}
+			case a := <-reg:
+				{
+					for _, b := range a {
+						dirty = dirty.add(b)
+					}
+				}
+			}
+		} else if len(nextdata) == 0 {
+			select {
+			case <-done:
+				{
+					if update_pending {
+						<-updata
+					}
+					close(updata)
+					return
+				}
+			case d := <-updata:
+				{
+					update_pending = false
+					nextdata = append(nextdata, d...)
 				}
 			case msg = <-ch:
 				{
@@ -184,11 +238,52 @@ func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte
 						dirty = dirty.add(b)
 					}
 				}
-
 			// This happens only when we can immediately read
 			// the image data as well.
-			case fbch <- getUpdate{dirty.intersect(wanted), outch}:
+			case fbch <- getUpdate{dirty.intersect(wanted), updata}:
 				{
+					// reset the wanted and dirty image.Rectangle
+					wanted = image.Rect(0, 0, 0, 0)
+					dirty = mkclean()
+				}
+			}
+		} else {
+			select {
+			case <-done:
+				{
+					if update_pending {
+						<-updata
+					}
+					close(updata)
+					return
+				}
+			case outch <- nextdata:
+				{
+					update_pending = false
+					nextdata = [][]byte{}
+				}
+			case d := <-updata:
+				{
+					nextdata = append(nextdata, d...)
+				}
+			case msg = <-ch:
+				{
+					wanted = msg.Rectangle
+					if !msg.incr {
+						dirty = dirty.add(msg.Rectangle)
+					}
+				}
+			case a := <-reg:
+				{
+					for _, b := range a {
+						dirty = dirty.add(b)
+					}
+				}
+			// This happens only when we can immediately read
+			// the image data as well.
+			case fbch <- getUpdate{dirty.intersect(wanted), updata}:
+				{
+					update_pending = true
 					// reset the wanted and dirty image.Rectangle
 					wanted = image.Rect(0, 0, 0, 0)
 					dirty = mkclean()
@@ -291,12 +386,19 @@ func clientInput(in io.Reader, mux chan muxMsg, dt chan updateRect) {
 	}
 }
 
-func clientOutput(out io.Writer, ch <-chan [][]byte) {
-	for b := range ch {
-		for _, c := range b {
-			// XXX Avoid race with "case a := <-fbch:" in updater(),
-			//     when aborting this goroutine
-			out.Write(c)
+func clientOutput(out io.Writer, ch <-chan [][]byte, done <-chan interface{}) {
+	for {
+		select {
+		case <-done:
+			{
+				return
+			}
+		case b := <-ch:
+			{
+				for _, c := range b {
+					out.Write(c)
+				}
+			}
 		}
 	}
 }
@@ -348,6 +450,7 @@ func handleConn(client *RfbClient, fbch chan getUpdate) {
 	done := make(chan interface{})
 	dt := make(chan updateRect)
 	outch := make(chan [][]byte)
+	outdone := make(chan interface{})
 
 	go func() {
 		reg := <-client.regch
@@ -362,16 +465,18 @@ func handleConn(client *RfbClient, fbch chan getUpdate) {
 		defer wg.Done()
 		clientInput(client.conn, client.mux, dt)
 		fmt.Printf("finished clientInput\n")
+		outdone <- nil
 	}()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		clientOutput(client.conn, outch)
+		clientOutput(client.conn, outch, outdone)
 		fmt.Printf("finished clientOutput\n")
 	}()
 
 	wg.Wait()
 	done <- nil
+	close(outdone)
 	close(done)
 	close(outch)
 	close(dt)

@@ -603,11 +603,7 @@ func remove(ls []chan []image.Rectangle, a chan []image.Rectangle) []chan []imag
 	res := ls
 	for i, c := range ls {
 		if a == c {
-			if i+1 < len(ls) {
-				res = append(ls[:i], ls[i+1:]...)
-			} else {
-				res = ls[:i]
-			}
+			res = append(ls[:i], ls[i+1:]...)
 			close(a)
 		}
 	}

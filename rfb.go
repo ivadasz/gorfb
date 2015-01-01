@@ -646,11 +646,7 @@ func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer, regch chan 
 					case a := <-unregch:
 						{
 							reglist = remove(reglist, a)
-							if a == reg {
-								mylist = mylist[1:]
-							} else {
-								mylist = remove(mylist, a)
-							}
+							mylist = remove(mylist, a)
 						}
 					}
 				}

@@ -146,16 +146,19 @@ func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte
 	nextdata := [][]byte{}
 	updata := make(chan [][]byte)
 	update_pending := false
+	defer func() {
+		if update_pending {
+			<-updata
+			update_pending = false
+		}
+		close(updata)
+	}()
 
 	for {
 		if dirty.intersect(wanted).empty() && len(nextdata) == 0 {
 			select {
 			case <-done:
 				{
-					if update_pending {
-						<-updata
-					}
-					close(updata)
 					return
 				}
 			case d := <-updata:
@@ -181,10 +184,6 @@ func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte
 			select {
 			case <-done:
 				{
-					if update_pending {
-						<-updata
-					}
-					close(updata)
 					return
 				}
 			case d := <-updata:
@@ -214,10 +213,6 @@ func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte
 			select {
 			case <-done:
 				{
-					if update_pending {
-						<-updata
-					}
-					close(updata)
 					return
 				}
 			case d := <-updata:
@@ -251,10 +246,6 @@ func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte
 			select {
 			case <-done:
 				{
-					if update_pending {
-						<-updata
-					}
-					close(updata)
 					return
 				}
 			case outch <- nextdata:

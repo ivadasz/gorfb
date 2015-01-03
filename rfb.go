@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"sync"
 )
 
 type (
@@ -138,7 +137,7 @@ func getSharedFlag(conn net.Conn) (bool, error) {
 	return d[0] == 1, nil
 }
 
-func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte, reg <-chan []image.Rectangle, done chan interface{}) {
+func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte, reg <-chan []image.Rectangle, done <-chan interface{}) {
 	var msg updateRect
 
 	wanted := image.Rect(0, 0, 0, 0)
@@ -284,7 +283,7 @@ func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte
 	}
 }
 
-func clientInput(in io.Reader, mux chan muxMsg, dt chan updateRect) {
+func clientInput(in io.Reader, mux chan muxMsg, dt chan updateRect, done <-chan interface{}) {
 	b := make([]byte, 1)
 	for {
 		n, err := in.Read(b)
@@ -334,7 +333,13 @@ func clientInput(in io.Reader, mux chan muxMsg, dt chan updateRect) {
 					log.Print(err)
 					return
 				}
-				dt <- updateRequest(b)
+				select {
+				case <-done:
+					{
+						return
+					}
+				case dt <- updateRequest(b):
+				}
 			}
 		case keyEventReq:
 			{
@@ -344,7 +349,13 @@ func clientInput(in io.Reader, mux chan muxMsg, dt chan updateRect) {
 					log.Print(err)
 					return
 				}
-				mux <- kbdEvent(b)
+				select {
+				case <-done:
+					{
+						return
+					}
+				case mux <- kbdEvent(b):
+				}
 			}
 		case pointerEventReq:
 			{
@@ -354,7 +365,13 @@ func clientInput(in io.Reader, mux chan muxMsg, dt chan updateRect) {
 					log.Print(err)
 					return
 				}
-				mux <- ptrEvent(b)
+				select {
+				case <-done:
+					{
+						return
+					}
+				case mux <- ptrEvent(b):
+				}
 			}
 		case clientCutTextReq:
 			{
@@ -371,7 +388,13 @@ func clientInput(in io.Reader, mux chan muxMsg, dt chan updateRect) {
 					log.Print(err)
 					return
 				}
-				mux <- cutEvent(c)
+				select {
+				case <-done:
+					{
+						return
+					}
+				case mux <- cutEvent(c):
+				}
 			}
 		}
 	}
@@ -387,7 +410,11 @@ func clientOutput(out io.Writer, ch <-chan [][]byte, done <-chan interface{}) {
 		case b := <-ch:
 			{
 				for _, c := range b {
-					out.Write(c)
+					n, err := out.Write(c)
+					if err != nil || n < len(c) {
+						log.Print(err)
+						return
+					}
 				}
 			}
 		}
@@ -432,43 +459,41 @@ func initializeConnection(conn net.Conn, bounds image.Rectangle) {
 }
 
 func handleConn(client *RfbClient, fbch chan getUpdate) {
-	var wg sync.WaitGroup
-
 	initializeConnection(client.conn, client.bounds)
 
-	defer fmt.Printf("finished connection\n")
-
-	done := make(chan interface{})
 	dt := make(chan updateRect)
 	outch := make(chan [][]byte)
-	outdone := make(chan interface{})
 
+	snc := NewSyncer()
+
+	snc.Add("net.Conn closer")
+	go func() {
+		defer snc.Killed("net.Conn closer")
+		defer client.conn.Close()
+		<-snc.Killer
+	}()
+
+	snc.Add("dirtyTracker")
 	go func() {
 		reg := <-client.regch
+		defer snc.Killed("dirtyTracker")
 		defer func() {
 			client.unregch <- reg
-			fmt.Printf("finished dirtyTracker\n")
 		}()
-		dirtyTracker(dt, fbch, outch, reg, done)
+		dirtyTracker(dt, fbch, outch, reg, snc.Killer)
 	}()
-	wg.Add(1)
+	snc.Add("clientInput")
 	go func() {
-		defer wg.Done()
-		clientInput(client.conn, client.mux, dt)
-		fmt.Printf("finished clientInput\n")
-		outdone <- nil
+		defer snc.Killed("clientInput")
+		clientInput(client.conn, client.mux, dt, snc.Killer)
 	}()
-	wg.Add(1)
+	snc.Add("clientInput")
 	go func() {
-		defer wg.Done()
-		clientOutput(client.conn, outch, outdone)
-		fmt.Printf("finished clientOutput\n")
+		defer snc.Killed("clientOutput")
+		clientOutput(client.conn, outch, snc.Killer)
 	}()
 
-	wg.Wait()
-	done <- nil
-	close(outdone)
-	close(done)
+	snc.Wait()
 	close(outch)
 	close(dt)
 }

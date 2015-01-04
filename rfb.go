@@ -694,14 +694,10 @@ func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer) {
 				reg := mylist[0]
 				select {
 				case reg <- d:
-					{
-						mylist = mylist[1:]
-					}
+					mylist = mylist[1:]
 				case a := <-serv.unregch:
-					{
-						reglist = remove(reglist, a)
-						mylist = remove(mylist, a)
-					}
+					reglist = remove(reglist, a)
+					mylist = remove(mylist, a)
 				}
 			}
 		case a := <-fbch:

@@ -157,127 +157,87 @@ func dirtyTracker(ch <-chan updateRect, fbch chan<- getUpdate, outch chan<- [][]
 		if dirty.intersect(wanted).empty() && len(nextdata) == 0 {
 			select {
 			case <-done:
-				{
-					return
-				}
+				return
 			case d := <-updata:
-				{
-					update_pending = false
-					nextdata = append(nextdata, d...)
-				}
+				update_pending = false
+				nextdata = append(nextdata, d...)
 			case msg := <-ch:
-				{
-					wanted = msg.Rectangle
-					if !msg.incr {
-						dirty = dirty.add(msg.Rectangle)
-					}
+				wanted = msg.Rectangle
+				if !msg.incr {
+					dirty = dirty.add(msg.Rectangle)
 				}
 			case a := <-reg:
-				{
-					for _, b := range a {
-						dirty = dirty.add(b)
-					}
+				for _, b := range a {
+					dirty = dirty.add(b)
 				}
 			}
 		} else if dirty.intersect(wanted).empty() {
 			select {
 			case <-done:
-				{
-					return
-				}
+				return
 			case d := <-updata:
-				{
-					update_pending = false
-					nextdata = append(nextdata, d...)
-				}
+				update_pending = false
+				nextdata = append(nextdata, d...)
 			case outch <- nextdata:
-				{
-					nextdata = [][]byte{}
-				}
+				nextdata = [][]byte{}
 			case msg := <-ch:
-				{
-					wanted = msg.Rectangle
-					if !msg.incr {
-						dirty = dirty.add(msg.Rectangle)
-					}
+				wanted = msg.Rectangle
+				if !msg.incr {
+					dirty = dirty.add(msg.Rectangle)
 				}
 			case a := <-reg:
-				{
-					for _, b := range a {
-						dirty = dirty.add(b)
-					}
+				for _, b := range a {
+					dirty = dirty.add(b)
 				}
 			}
 		} else if len(nextdata) == 0 {
 			select {
 			case <-done:
-				{
-					return
-				}
+				return
 			case d := <-updata:
-				{
-					update_pending = false
-					nextdata = append(nextdata, d...)
-				}
+				update_pending = false
+				nextdata = append(nextdata, d...)
 			case msg = <-ch:
-				{
-					wanted = msg.Rectangle
-					if !msg.incr {
-						dirty = dirty.add(msg.Rectangle)
-					}
+				wanted = msg.Rectangle
+				if !msg.incr {
+					dirty = dirty.add(msg.Rectangle)
 				}
 			case a := <-reg:
-				{
-					for _, b := range a {
-						dirty = dirty.add(b)
-					}
+				for _, b := range a {
+					dirty = dirty.add(b)
 				}
 			// This happens only when we can immediately read
 			// the image data as well.
 			case fbch <- getUpdate{dirty.intersect(wanted), updata}:
-				{
-					// reset the wanted and dirty image.Rectangle
-					wanted = image.Rect(0, 0, 0, 0)
-					dirty = mkclean()
-				}
+				// reset the wanted and dirty image.Rectangle
+				wanted = image.Rect(0, 0, 0, 0)
+				dirty = mkclean()
 			}
 		} else {
 			select {
 			case <-done:
-				{
-					return
-				}
+				return
 			case outch <- nextdata:
-				{
-					update_pending = false
-					nextdata = [][]byte{}
-				}
+				update_pending = false
+				nextdata = [][]byte{}
 			case d := <-updata:
-				{
-					nextdata = append(nextdata, d...)
-				}
+				nextdata = append(nextdata, d...)
 			case msg = <-ch:
-				{
-					wanted = msg.Rectangle
-					if !msg.incr {
-						dirty = dirty.add(msg.Rectangle)
-					}
+				wanted = msg.Rectangle
+				if !msg.incr {
+					dirty = dirty.add(msg.Rectangle)
 				}
 			case a := <-reg:
-				{
-					for _, b := range a {
-						dirty = dirty.add(b)
-					}
+				for _, b := range a {
+					dirty = dirty.add(b)
 				}
 			// This happens only when we can immediately read
 			// the image data as well.
 			case fbch <- getUpdate{dirty.intersect(wanted), updata}:
-				{
-					update_pending = true
-					// reset the wanted and dirty image.Rectangle
-					wanted = image.Rect(0, 0, 0, 0)
-					dirty = mkclean()
-				}
+				update_pending = true
+				// reset the wanted and dirty image.Rectangle
+				wanted = image.Rect(0, 0, 0, 0)
+				dirty = mkclean()
 			}
 		}
 	}
@@ -293,108 +253,88 @@ func clientInput(in io.Reader, mux chan<- muxMsg, dt chan<- updateRect, done <-c
 		}
 		switch b[0] {
 		case setPixelFormatReq:
-			{
-				var b [19]byte
-				var c [16]byte
-				n, err := in.Read(b[:])
-				if err != nil || n != 19 {
-					log.Print(err)
-					return
-				}
-				copy(c[:], b[3:])
-				format := decodePixelFormat(c)
-				fmt.Printf("Pixel Format: %v\n", format)
+			var b [19]byte
+			var c [16]byte
+			n, err := in.Read(b[:])
+			if err != nil || n != 19 {
+				log.Print(err)
+				return
 			}
+			copy(c[:], b[3:])
+			format := decodePixelFormat(c)
+			fmt.Printf("Pixel Format: %v\n", format)
 		case setEncodingsReq:
-			{
-				var b [3]byte
-				n, err := in.Read(b[:])
-				if err != nil || n != 3 {
-					log.Print(err)
-					return
-				}
-				m := binary.BigEndian.Uint16(b[1:3])
-				c := make([]byte, 4*m)
-				for i := 0; i < int(m); i++ {
-					n, err := in.Read(c[4*i : 4*(i+1)])
-					if err != nil || n != 4 {
-						log.Print(err)
-						return
-					}
-				}
-				ls := decodeEncodings(c)
-				fmt.Printf("Encodings: %v\n", ls)
+			var b [3]byte
+			n, err := in.Read(b[:])
+			if err != nil || n != 3 {
+				log.Print(err)
+				return
 			}
-		case framebufferUpdateReq:
-			{
-				var b [9]byte
-				n, err := in.Read(b[:])
-				if err != nil || n != 9 {
+			m := binary.BigEndian.Uint16(b[1:3])
+			c := make([]byte, 4*m)
+			for i := 0; i < int(m); i++ {
+				n, err := in.Read(c[4*i : 4*(i+1)])
+				if err != nil || n != 4 {
 					log.Print(err)
 					return
 				}
-				select {
-				case <-done:
-					{
-						return
-					}
-				case dt <- updateRequest(b):
-				}
+			}
+			ls := decodeEncodings(c)
+			fmt.Printf("Encodings: %v\n", ls)
+		case framebufferUpdateReq:
+			var b [9]byte
+			n, err := in.Read(b[:])
+			if err != nil || n != 9 {
+				log.Print(err)
+				return
+			}
+			select {
+			case <-done:
+				return
+			case dt <- updateRequest(b):
 			}
 		case keyEventReq:
-			{
-				var b [7]byte
-				n, err := in.Read(b[:])
-				if err != nil || n != 7 {
-					log.Print(err)
-					return
-				}
-				select {
-				case <-done:
-					{
-						return
-					}
-				case mux <- kbdEvent(b):
-				}
+			var b [7]byte
+			n, err := in.Read(b[:])
+			if err != nil || n != 7 {
+				log.Print(err)
+				return
+			}
+			select {
+			case <-done:
+				return
+			case mux <- kbdEvent(b):
 			}
 		case pointerEventReq:
-			{
-				var b [5]byte
-				n, err := in.Read(b[:])
-				if err != nil || n != 5 {
-					log.Print(err)
-					return
-				}
-				select {
-				case <-done:
-					{
-						return
-					}
-				case mux <- ptrEvent(b):
-				}
+			var b [5]byte
+			n, err := in.Read(b[:])
+			if err != nil || n != 5 {
+				log.Print(err)
+				return
+			}
+			select {
+			case <-done:
+				return
+			case mux <- ptrEvent(b):
 			}
 		case clientCutTextReq:
-			{
-				b := make([]byte, 7)
-				n, err := in.Read(b)
-				if err != nil || n != 7 {
-					log.Print(err)
-					return
-				}
-				length := binary.BigEndian.Uint32(b[3:7])
-				c := make([]byte, length)
-				n, err = in.Read(c)
-				if err != nil || n != int(length) {
-					log.Print(err)
-					return
-				}
-				select {
-				case <-done:
-					{
-						return
-					}
-				case mux <- cutEvent(c):
-				}
+			b := make([]byte, 7)
+			n, err := in.Read(b)
+			if err != nil || n != 7 {
+				log.Print(err)
+				return
+			}
+			length := binary.BigEndian.Uint32(b[3:7])
+			c := make([]byte, length)
+			n, err = in.Read(c)
+			if err != nil || n != int(length) {
+				log.Print(err)
+				return
+			}
+			select {
+			case <-done:
+				return
+			case mux <- cutEvent(c):
 			}
 		}
 	}
@@ -404,17 +344,13 @@ func clientOutput(out io.Writer, ch <-chan [][]byte, done <-chan interface{}) {
 	for {
 		select {
 		case <-done:
-			{
-				return
-			}
+			return
 		case b := <-ch:
-			{
-				for _, c := range b {
-					n, err := out.Write(c)
-					if err != nil || n < len(c) {
-						log.Print(err)
-						return
-					}
+			for _, c := range b {
+				n, err := out.Write(c)
+				if err != nil || n < len(c) {
+					log.Print(err)
+					return
 				}
 			}
 		}
@@ -746,43 +682,35 @@ func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer) {
 	for {
 		select {
 		case serv.Getfb <- img:
-			{
-				d := <-serv.Relfb
-				// Signal the d image.Rectangle to all the
-				// dirtyTrackers. Avoid deadlock when any the
-				// dirtyTracker wants to unregister.
-				mylist := reglist[:]
-				for {
-					if len(mylist) == 0 {
-						break
+			d := <-serv.Relfb
+			// Signal the d image.Rectangle to all the
+			// dirtyTrackers. Avoid deadlock when any the
+			// dirtyTracker wants to unregister.
+			mylist := reglist[:]
+			for {
+				if len(mylist) == 0 {
+					break
+				}
+				reg := mylist[0]
+				select {
+				case reg <- d:
+					{
+						mylist = mylist[1:]
 					}
-					reg := mylist[0]
-					select {
-					case reg <- d:
-						{
-							mylist = mylist[1:]
-						}
-					case a := <-serv.unregch:
-						{
-							reglist = remove(reglist, a)
-							mylist = remove(mylist, a)
-						}
+				case a := <-serv.unregch:
+					{
+						reglist = remove(reglist, a)
+						mylist = remove(mylist, a)
 					}
 				}
 			}
 		case a := <-fbch:
-			{
-				a.outch <- encodeDirty(img, a.Dirty)
-			}
+			a.outch <- encodeDirty(img, a.Dirty)
 		case serv.regch <- ch:
-			{
-				reglist = append(reglist, ch)
-				ch = make(chan []image.Rectangle)
-			}
+			reglist = append(reglist, ch)
+			ch = make(chan []image.Rectangle)
 		case a := <-serv.unregch:
-			{
-				reglist = remove(reglist, a)
-			}
+			reglist = remove(reglist, a)
 		}
 	}
 }

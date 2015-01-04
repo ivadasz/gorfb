@@ -38,34 +38,26 @@ func NewSyncer() Syncer {
 		for {
 			select {
 			case <-add:
-				{
-					cnt++
-				}
+				cnt++
 			case name := <-d:
-				{
-					fmt.Printf("dead goroutine: %s\n", name)
-					cnt--
-					for {
-						if cnt == 0 {
-							close(k)
-							close(d)
-							close(add)
-							done <- nil
-							close(done)
-							return
-						}
-						select {
-						case <-add:
-							{
-								cnt++
-							}
-						case name := <-d:
-							{
-								fmt.Printf("dead goroutine: %s\n", name)
-								cnt--
-							}
-						case k <- nil:
-						}
+				fmt.Printf("dead goroutine: %s\n", name)
+				cnt--
+				for {
+					if cnt == 0 {
+						close(k)
+						close(d)
+						close(add)
+						done <- nil
+						close(done)
+						return
+					}
+					select {
+					case <-add:
+						cnt++
+					case name := <-d:
+						fmt.Printf("dead goroutine: %s\n", name)
+						cnt--
+					case k <- nil:
 					}
 				}
 			}

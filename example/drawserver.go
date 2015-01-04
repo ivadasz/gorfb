@@ -44,45 +44,35 @@ func main() {
 		if len(pending) > 0 {
 			select {
 			case a := <-serv.Getfb:
-				{
-					dirty := []image.Rectangle{}
-					for _, p := range pending {
-						if p.T == 0 {
-							// Mouse Event
-							dirty = append(dirty, drawdot(a, p.Pos))
-						} else {
-							// Keyboard Event
-							fmt.Printf("keyboard event: downflag=%v, key=0x%x\n", p.Mask, p.Key)
-						}
+				dirty := []image.Rectangle{}
+				for _, p := range pending {
+					if p.T == 0 {
+						// Mouse Event
+						dirty = append(dirty, drawdot(a, p.Pos))
+					} else {
+						// Keyboard Event
+						fmt.Printf("keyboard event: downflag=%v, key=0x%x\n", p.Mask, p.Key)
 					}
-					serv.Relfb <- dirty
-					pending = []gorfb.InputEvent{}
 				}
+				serv.Relfb <- dirty
+				pending = []gorfb.InputEvent{}
 			case a := <-serv.Input:
-				{
-					pending = append(pending, a)
-				}
+				pending = append(pending, a)
 			case a := <-serv.Txt:
-				{
-					fmt.Printf("Cut Text: %v\n", a)
-				}
+				fmt.Printf("Cut Text: %v\n", a)
 			}
 		} else {
 			select {
 			case a := <-serv.Input:
-				{
-					if a.T == 0 {
-						// Mouse Event
-						pending = append(pending, a)
-					} else if a.T == 1 {
-						// Keyboard Event
-						fmt.Printf("keyboard event: downflag=%v, key=0x%x\n", a.Mask, a.Key)
-					}
+				if a.T == 0 {
+					// Mouse Event
+					pending = append(pending, a)
+				} else if a.T == 1 {
+					// Keyboard Event
+					fmt.Printf("keyboard event: downflag=%v, key=0x%x\n", a.Mask, a.Key)
 				}
 			case a := <-serv.Txt:
-				{
-					fmt.Printf("Cut Text: %v\n", a)
-				}
+				fmt.Printf("Cut Text: %v\n", a)
 			}
 		}
 	}

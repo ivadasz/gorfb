@@ -7,9 +7,9 @@ import (
 type (
 	Syncer struct {
 		Killer <-chan interface{}
-		Dead chan string
-		add chan string
-		done <-chan interface{}
+		Dead   chan<- string
+		add    chan<- string
+		done   <-chan interface{}
 	}
 )
 
@@ -37,11 +37,11 @@ func NewSyncer() Syncer {
 
 		for {
 			select {
-			case <- add:
+			case <-add:
 				{
 					cnt++
 				}
-			case name := <- d:
+			case name := <-d:
 				{
 					fmt.Printf("dead goroutine: %s\n", name)
 					cnt--
@@ -55,11 +55,11 @@ func NewSyncer() Syncer {
 							return
 						}
 						select {
-						case <- add:
+						case <-add:
 							{
 								cnt++
 							}
-						case name := <- d:
+						case name := <-d:
 							{
 								fmt.Printf("dead goroutine: %s\n", name)
 								cnt--

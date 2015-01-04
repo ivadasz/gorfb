@@ -24,9 +24,9 @@ type (
 	RfbClient struct {
 		conn    net.Conn
 		bounds  image.Rectangle
-		mux     chan muxMsg
+		mux     chan<- muxMsg
 		regch   <-chan chan []image.Rectangle
-		unregch chan chan []image.Rectangle
+		unregch chan<- chan []image.Rectangle
 	}
 	PixelFormat struct {
 		bpp, depth, beflag, trueColor   uint8
@@ -48,11 +48,11 @@ type (
 	}
 	getUpdate struct {
 		Dirty
-		outch chan [][]byte
+		outch chan<- [][]byte
 	}
 	rfbMuxState struct {
-		input chan InputEvent
-		cut   chan CutEvent
+		input chan<- InputEvent
+		cut   chan<- CutEvent
 	}
 	muxMsg interface {
 		work(state *rfbMuxState)
@@ -137,7 +137,7 @@ func getSharedFlag(conn net.Conn) (bool, error) {
 	return d[0] == 1, nil
 }
 
-func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte, reg <-chan []image.Rectangle, done <-chan interface{}) {
+func dirtyTracker(ch <-chan updateRect, fbch chan<- getUpdate, outch chan<- [][]byte, reg <-chan []image.Rectangle, done <-chan interface{}) {
 	var msg updateRect
 
 	wanted := image.Rect(0, 0, 0, 0)
@@ -283,7 +283,7 @@ func dirtyTracker(ch <-chan updateRect, fbch chan getUpdate, outch chan [][]byte
 	}
 }
 
-func clientInput(in io.Reader, mux chan muxMsg, dt chan updateRect, done <-chan interface{}) {
+func clientInput(in io.Reader, mux chan<- muxMsg, dt chan<- updateRect, done <-chan interface{}) {
 	b := make([]byte, 1)
 	for {
 		n, err := in.Read(b)
@@ -458,7 +458,7 @@ func initializeConnection(conn net.Conn, bounds image.Rectangle) {
 	conn.Write(serverInit.encode())
 }
 
-func handleConn(client *RfbClient, fbch chan getUpdate) {
+func handleConn(client *RfbClient, fbch chan<- getUpdate) {
 	initializeConnection(client.conn, client.bounds)
 
 	dt := make(chan updateRect)
@@ -498,7 +498,7 @@ func handleConn(client *RfbClient, fbch chan getUpdate) {
 	close(dt)
 }
 
-func accepter(serv *RfbServer, bounds image.Rectangle, mux chan muxMsg, fbch chan getUpdate) {
+func accepter(serv *RfbServer, bounds image.Rectangle, mux chan<- muxMsg, fbch chan<- getUpdate) {
 	for {
 		conn, err := serv.ln.Accept()
 		if err != nil {
@@ -722,7 +722,7 @@ func encodeDirty(img image.Image, dirt Dirty) [][]byte {
 	return outbytes
 }
 
-func remove(ls []chan []image.Rectangle, a chan []image.Rectangle) []chan []image.Rectangle {
+func remove(ls []chan<- []image.Rectangle, a chan<- []image.Rectangle) []chan<- []image.Rectangle {
 	res := ls
 	for i, c := range ls {
 		if a == c {
@@ -734,7 +734,7 @@ func remove(ls []chan []image.Rectangle, a chan []image.Rectangle) []chan []imag
 }
 
 func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer) {
-	reglist := []chan []image.Rectangle{}
+	reglist := []chan<- []image.Rectangle{}
 	defer func() {
 		for _, ch := range reglist {
 			close(ch)

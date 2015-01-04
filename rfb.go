@@ -41,14 +41,16 @@ type (
 	}
 	updateRect struct {
 		image.Rectangle
-		incr bool
+		incr   bool
+		choice encodings
 	}
 	encodable interface {
 		encode() []byte
 	}
 	getUpdate struct {
 		Dirty
-		outch chan<- [][]byte
+		outch  chan<- [][]byte
+		choice encodings
 	}
 	rfbMuxState struct {
 		input chan<- InputEvent
@@ -137,9 +139,29 @@ func getSharedFlag(conn net.Conn) (bool, error) {
 	return d[0] == 1, nil
 }
 
+func (enc encodings) check(e int32) bool {
+	for _, val := range enc {
+		if val == e {
+			return true
+		}
+	}
+	return false
+}
+
+func (enc encodings) filter(a encodings) (res encodings) {
+	for _, val := range enc {
+		if a.check(val) {
+			res = append(res, val)
+		}
+	}
+	return
+}
+
 func dirtyTracker(ch <-chan updateRect, fbch chan<- getUpdate, outch chan<- [][]byte, reg <-chan []image.Rectangle, done <-chan interface{}) {
 	var msg updateRect
 
+	choice := encodings{encodingRaw} // fallback
+	supported := encodings{encodingRaw}
 	wanted := image.Rect(0, 0, 0, 0)
 	dirty := mkclean()
 	nextdata := [][]byte{}
@@ -181,6 +203,7 @@ func dirtyTracker(ch <-chan updateRect, fbch chan<- getUpdate, outch chan<- [][]
 			case outch <- nextdata:
 				nextdata = [][]byte{}
 			case msg := <-ch:
+				choice = msg.choice.filter(supported)
 				wanted = msg.Rectangle
 				if !msg.incr {
 					dirty = dirty.add(msg.Rectangle)
@@ -208,7 +231,7 @@ func dirtyTracker(ch <-chan updateRect, fbch chan<- getUpdate, outch chan<- [][]
 				}
 			// This happens only when we can immediately read
 			// the image data as well.
-			case fbch <- getUpdate{dirty.intersect(wanted), updata}:
+			case fbch <- getUpdate{dirty.intersect(wanted), updata, choice}:
 				// reset the wanted and dirty image.Rectangle
 				wanted = image.Rect(0, 0, 0, 0)
 				dirty = mkclean()
@@ -233,7 +256,7 @@ func dirtyTracker(ch <-chan updateRect, fbch chan<- getUpdate, outch chan<- [][]
 				}
 			// This happens only when we can immediately read
 			// the image data as well.
-			case fbch <- getUpdate{dirty.intersect(wanted), updata}:
+			case fbch <- getUpdate{dirty.intersect(wanted), updata, choice}:
 				update_pending = true
 				// reset the wanted and dirty image.Rectangle
 				wanted = image.Rect(0, 0, 0, 0)
@@ -244,6 +267,7 @@ func dirtyTracker(ch <-chan updateRect, fbch chan<- getUpdate, outch chan<- [][]
 }
 
 func clientInput(in io.Reader, mux chan<- muxMsg, dt chan<- updateRect, done <-chan interface{}) {
+	choice := encodings{encodingRaw} // fallback
 	b := make([]byte, 1)
 	for {
 		n, err := in.Read(b)
@@ -279,8 +303,8 @@ func clientInput(in io.Reader, mux chan<- muxMsg, dt chan<- updateRect, done <-c
 					return
 				}
 			}
-			ls := decodeEncodings(c)
-			fmt.Printf("Encodings: %v\n", ls)
+			choice := decodeEncodings(c)
+			fmt.Printf("Encodings: %v\n", choice)
 		case framebufferUpdateReq:
 			var b [9]byte
 			n, err := in.Read(b[:])
@@ -291,7 +315,7 @@ func clientInput(in io.Reader, mux chan<- muxMsg, dt chan<- updateRect, done <-c
 			select {
 			case <-done:
 				return
-			case dt <- updateRequest(b):
+			case dt <- updateRequest(b, choice):
 			}
 		case keyEventReq:
 			var b [7]byte
@@ -485,7 +509,7 @@ func decodeEncodings(b []byte) encodings {
 	return e
 }
 
-func updateRequest(b [9]byte) updateRect {
+func updateRequest(b [9]byte, choice encodings) updateRect {
 	incr := b[0] == 1
 	x := int(binary.BigEndian.Uint16(b[1:3]))
 	y := int(binary.BigEndian.Uint16(b[3:5]))
@@ -493,7 +517,7 @@ func updateRequest(b [9]byte) updateRect {
 	h := int(binary.BigEndian.Uint16(b[7:9]))
 
 	// Send the viewport of our remote client to the dirtyTracker goroutine.
-	return updateRect{image.Rect(x, y, x+w, y+h), incr}
+	return updateRect{image.Rect(x, y, x+w, y+h), incr, choice}
 }
 
 func ptrEvent(b [5]byte) InputEvent {
@@ -638,7 +662,7 @@ func encodeRaw(img image.Image, rect image.Rectangle, b [][]byte) {
 	b[1] = rawbuf
 }
 
-func encodeDirty(img image.Image, dirt Dirty) [][]byte {
+func encodeDirty(img image.Image, dirt Dirty, choice encodings) [][]byte {
 	rs := dirt.toRects()
 	nrects := len(rs)
 
@@ -653,7 +677,14 @@ func encodeDirty(img image.Image, dirt Dirty) [][]byte {
 	binary.BigEndian.PutUint16(outbuf[2:4], uint16(nrects))
 	outbytes[0] = outbuf
 	for i, r := range rs {
-		encodeRaw(img, r, outbytes[2*i+1:2*i+3])
+		// XXX implement more encodings
+		// for now just use the first encoding in the choice slice
+		if len(choice) > 0 && choice[0] == encodingRaw {
+			encodeRaw(img, r, outbytes[2*i+1:2*i+3])
+		} else {
+			// fall back to raw encoding
+			encodeRaw(img, r, outbytes[2*i+1:2*i+3])
+		}
 	}
 	return outbytes
 }
@@ -701,7 +732,7 @@ func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer) {
 				}
 			}
 		case a := <-fbch:
-			a.outch <- encodeDirty(img, a.Dirty)
+			a.outch <- encodeDirty(img, a.Dirty, a.choice)
 		case serv.regch <- ch:
 			reglist = append(reglist, ch)
 			ch = make(chan []image.Rectangle)

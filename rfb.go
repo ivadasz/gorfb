@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
 )
 
 type (
@@ -419,43 +420,53 @@ func initializeConnection(conn net.Conn, bounds image.Rectangle) {
 }
 
 func handleConn(client *RfbClient, fbch chan<- getUpdate) {
+	var wg sync.WaitGroup
+	var once sync.Once
+
 	initializeConnection(client.conn, client.bounds)
 
 	dt := make(chan updateRect)
+	defer close(dt)
 	outch := make(chan [][]byte)
+	defer close(outch)
+	done := make(chan interface{})
+	onceBody := func() {
+		close(done)
+	}
+	defer once.Do(onceBody)
 
-	snc := NewSyncer()
-
-	snc.Add("net.Conn closer")
+	wg.Add(1)
 	go func() {
-		defer snc.Killed("net.Conn closer")
+		defer wg.Done()
 		defer client.conn.Close()
-		<-snc.Killer
+		<-done
 	}()
 
-	snc.Add("dirtyTracker")
+	wg.Add(1)
 	go func() {
 		reg := <-client.regch
-		defer snc.Killed("dirtyTracker")
+		defer wg.Done()
+		defer once.Do(onceBody)
 		defer func() {
 			client.unregch <- reg
 		}()
-		dirtyTracker(dt, fbch, outch, reg, snc.Killer)
+		dirtyTracker(dt, fbch, outch, reg, done)
 	}()
-	snc.Add("clientInput")
+	wg.Add(1)
 	go func() {
-		defer snc.Killed("clientInput")
-		clientInput(client.conn, client.mux, dt, snc.Killer)
+		defer wg.Done()
+		defer once.Do(onceBody)
+		clientInput(client.conn, client.mux, dt, done)
 	}()
-	snc.Add("clientInput")
+	wg.Add(1)
 	go func() {
-		defer snc.Killed("clientOutput")
-		clientOutput(client.conn, outch, snc.Killer)
+		defer wg.Done()
+		defer once.Do(onceBody)
+		clientOutput(client.conn, outch, done)
 	}()
 
-	snc.Wait()
-	close(outch)
-	close(dt)
+	wg.Wait()
+	defer fmt.Printf("Connection closed\n")
 }
 
 func accepter(serv *RfbServer, bounds image.Rectangle, mux chan<- muxMsg, fbch chan<- getUpdate) {

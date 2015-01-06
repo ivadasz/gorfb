@@ -466,7 +466,7 @@ func handleConn(client *RfbClient, fbch chan<- getUpdate) {
 	}()
 
 	wg.Wait()
-	defer fmt.Printf("Connection closed\n")
+	fmt.Printf("Connection closed\n")
 }
 
 func accepter(serv *RfbServer, bounds image.Rectangle, mux chan<- muxMsg, fbch chan<- getUpdate) {

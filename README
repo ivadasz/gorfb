@@ -1,6 +1,8 @@
 This aims to become a full blown RFB (VNC) server library written in go.
 
 The current code design tries to avoid blocking as much as possible.
-No actual negotiation of encodings is performed, we just send raw rectangles
-for now.
+But, at the moment encoding of dirty rectangles is still serialized into
+a single goroutine :(
+Only raw encoding is supported so far, and no authentication mechanism is
+supported.
 Tracking of dirty regions uses only up to two rectangles at a time.

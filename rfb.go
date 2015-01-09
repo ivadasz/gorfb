@@ -21,6 +21,9 @@ type (
 		Relfb   chan []image.Rectangle
 		regch   chan chan []image.Rectangle
 		unregch chan chan []image.Rectangle
+		done    chan interface{}
+		wg      sync.WaitGroup
+		once    sync.Once
 	}
 	RfbClient struct {
 		conn    net.Conn
@@ -28,6 +31,7 @@ type (
 		mux     chan<- muxMsg
 		regch   <-chan chan []image.Rectangle
 		unregch chan<- chan []image.Rectangle
+		done    <-chan interface{}
 	}
 	PixelFormat struct {
 		bpp, depth, beflag, trueColor   uint8
@@ -58,7 +62,7 @@ type (
 		cut   chan<- CutEvent
 	}
 	muxMsg interface {
-		work(state *rfbMuxState)
+		work(state *rfbMuxState, done <-chan interface{})
 	}
 
 	InputEvent struct {
@@ -435,6 +439,17 @@ func handleConn(client *RfbClient, fbch chan<- getUpdate) {
 	}
 	defer once.Do(onceBody)
 
+	// trigger connection shutdown, when the whole server is being stopped
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer once.Do(onceBody)
+		select {
+		case <-done:
+		case <-client.done:
+		}
+	}()
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -444,13 +459,19 @@ func handleConn(client *RfbClient, fbch chan<- getUpdate) {
 
 	wg.Add(1)
 	go func() {
-		reg := <-client.regch
 		defer wg.Done()
 		defer once.Do(onceBody)
-		defer func() {
-			client.unregch <- reg
-		}()
-		dirtyTracker(dt, fbch, outch, reg, done)
+		select {
+		case <-done:
+		case reg := <-client.regch:
+			defer func() {
+				select {
+				case <-client.done:
+				case client.unregch <- reg:
+				}
+			}()
+			dirtyTracker(dt, fbch, outch, reg, done)
+		}
 	}()
 	wg.Add(1)
 	go func() {
@@ -466,22 +487,6 @@ func handleConn(client *RfbClient, fbch chan<- getUpdate) {
 	}()
 
 	wg.Wait()
-	fmt.Printf("Connection closed\n")
-}
-
-func accepter(serv *RfbServer, bounds image.Rectangle, mux chan<- muxMsg, fbch chan<- getUpdate) {
-	for {
-		conn, err := serv.ln.Accept()
-		if err != nil {
-			log.Print(err)
-			return
-		}
-		client := &RfbClient{conn, bounds, mux, serv.regch, serv.unregch}
-		go func() {
-			defer conn.Close()
-			handleConn(client, fbch)
-		}()
-	}
 }
 
 func decodePixelFormat(b [16]byte) PixelFormat {
@@ -625,19 +630,30 @@ func (ev CutEvent) encode() []byte {
 	return b
 }
 
-func (ev InputEvent) work(state *rfbMuxState) {
-	state.input <- ev
+func (ev InputEvent) work(state *rfbMuxState, done <-chan interface{}) {
+	select {
+	case <-done:
+	case state.input <- ev:
+	}
 }
 
-func (ev CutEvent) work(state *rfbMuxState) {
-	state.cut <- ev
+func (ev CutEvent) work(state *rfbMuxState, done <-chan interface{}) {
+	select {
+	case <-done:
+	case state.cut <- ev:
+	}
 }
 
 func rfbMux(ch <-chan muxMsg, serv *RfbServer) {
 	state := rfbMuxState{serv.Input, serv.Txt}
 
-	for msg := range ch {
-		msg.work(&state)
+	for {
+		select {
+		case <-serv.done:
+			return
+		case msg := <-ch:
+			msg.work(&state, serv.done)
+		}
 	}
 }
 
@@ -719,27 +735,37 @@ func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer) {
 		}
 	}()
 	ch := make(chan []image.Rectangle)
-	defer close(ch)
+	defer func() {
+		close(ch)
+	}()
 
 	for {
 		select {
+		case <-serv.done:
+			return
 		case serv.Getfb <- img:
-			d := <-serv.Relfb
-			// Signal the d image.Rectangle to all the
-			// dirtyTrackers. Avoid deadlock when any the
-			// dirtyTracker wants to unregister.
-			mylist := reglist[:]
-			for {
-				if len(mylist) == 0 {
-					break
-				}
-				reg := mylist[0]
-				select {
-				case reg <- d:
-					mylist = mylist[1:]
-				case a := <-serv.unregch:
-					reglist = remove(reglist, a)
-					mylist = remove(mylist, a)
+			select {
+			case <-serv.done:
+				return
+			case d := <-serv.Relfb:
+				// Signal the d image.Rectangle to all the
+				// dirtyTrackers. Avoid deadlock when any the
+				// dirtyTracker wants to unregister.
+				mylist := reglist[:]
+				for {
+					if len(mylist) == 0 {
+						break
+					}
+					reg := mylist[0]
+					select {
+					case <-serv.done:
+						return
+					case reg <- d:
+						mylist = mylist[1:]
+					case a := <-serv.unregch:
+						reglist = remove(reglist, a)
+						mylist = remove(mylist, a)
+					}
 				}
 			}
 		case a := <-fbch:
@@ -755,18 +781,55 @@ func updater(img draw.Image, fbch <-chan getUpdate, serv *RfbServer) {
 
 func serve(port string, img draw.Image, serv *RfbServer) {
 	muxch := make(chan muxMsg)
-	defer close(muxch)
 	fbch := make(chan getUpdate)
-	defer close(fbch)
+	go func() {
+		defer close(muxch)
+		defer close(fbch)
+		serv.wg.Wait()
+	}()
 
-	go rfbMux(muxch, serv)
-	go updater(img, fbch, serv)
+	// XXX goroutine, which triggers serv.ln.Close(), in order to stop
+	//     the accepter goroutine
 
-	// go accepter(serv, muxch, fbch)
-	accepter(serv, img.Bounds(), muxch, fbch)
+	serv.wg.Add(1)
+	go func() {
+		defer serv.wg.Done()
+		defer serv.Shutdown()
+		rfbMux(muxch, serv)
+	}()
+	serv.wg.Add(1)
+	go func() {
+		defer serv.wg.Done()
+		defer serv.Shutdown()
+		updater(img, fbch, serv)
+	}()
+
+	serv.wg.Add(1)
+	go func() {
+		defer serv.wg.Done()
+		defer serv.Shutdown()
+		for {
+			conn, err := serv.ln.Accept()
+			if err != nil {
+				log.Print(err)
+				return
+			}
+			client := &RfbClient{conn, img.Bounds(), muxch, serv.regch, serv.unregch, serv.done}
+			serv.wg.Add(1)
+			go func() {
+				defer fmt.Printf("connection finished\n")
+				defer serv.wg.Done()
+				defer conn.Close()
+				handleConn(client, fbch)
+			}()
+		}
+	}()
 }
 
 func Server(port string, img draw.Image) (*RfbServer, error) {
+	var wg sync.WaitGroup
+	var once sync.Once
+
 	ln, err := net.Listen("tcp", port)
 	if err != nil {
 		return nil, err
@@ -777,9 +840,23 @@ func Server(port string, img draw.Image) (*RfbServer, error) {
 	relfb := make(chan []image.Rectangle)
 	regch := make(chan chan []image.Rectangle)
 	unregch := make(chan chan []image.Rectangle)
+	done := make(chan interface{})
 
-	serv := &RfbServer{ln, input, txt, getfb, relfb, regch, unregch}
-	go serve(port, img, serv)
+	serv := &RfbServer{ln, input, txt, getfb, relfb, regch, unregch, done, wg, once}
+	serv.wg.Add(1)
+	serve(port, img, serv)
+	serv.wg.Done()
+
+	go func() {
+		serv.wg.Wait()
+		close(input)
+		close(txt)
+		close(getfb)
+		close(relfb)
+		close(regch)
+		close(unregch)
+		fmt.Printf("Rfb server is finished\n")
+	}()
 
 	return serv, nil
 }
@@ -798,11 +875,12 @@ func ServeDumbFb(port string, w uint16, h uint16) (*RfbServer, error) {
 }
 
 func (serv *RfbServer) Shutdown() {
-	serv.ln.Close()
-	close(serv.Input)
-	close(serv.Txt)
-	close(serv.Getfb)
-	close(serv.Relfb)
-	close(serv.regch)
-	close(serv.unregch)
+	serv.once.Do(func() {
+		serv.ln.Close()
+		close(serv.done)
+	})
+}
+
+func (serv *RfbServer) Wait() {
+	serv.wg.Wait()
 }
